@@ -171,6 +171,8 @@ class ChatWatcher {
         continue;
       }
       if (m.id === st.notified) { st.waiting = false; continue; }
+      // 旧对话重新排到前面（重新打开 Claude 后同步、改名、收藏……）：回复是很早以前写的，而且没看到你发消息 → 不提醒
+      if (!st.waiting && m.at && m.at < now - 10 * 60e3) { st.notified = m.id; continue; }
       // 回复是否已经写完：接口给了结束标记就直接用；没给就等两次查询内容都不再变化
       const sig = m.text.length + "|" + c.u;
       const done = m.done === true || (st.stable && st.stable.id === m.id && st.stable.sig === sig && !changed);

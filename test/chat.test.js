@@ -78,6 +78,27 @@ let pass = 0; const ok = (n) => { pass++; console.log("  ✓ " + n); };
   assert.deepStrictEqual(await w.poll(), []);
   ok("改名 / 收藏旧对话 → 不提醒");
 
+  // 重新打开 Claude 后，一个 20 分钟前回复完的对话重新排进最近列表 → 不提醒
+  now += 3000;
+  convs.push({ uuid: "c3", name: "下午的对话", updated_at: "2026-11-04T06:03:00Z" });
+  detail.c3 = { name: "下午的对话", current_leaf_message_uuid: "z1", chat_messages: [{ uuid: "z1", sender: "assistant", text: "早就答完了", stop_reason: "end_turn", created_at: new Date(now - 20 * 60e3).toISOString() }] };
+  assert.deepStrictEqual(await w.poll(), []);
+  {
+    // 本程序已经开了 3 小时；20 分钟前回复完的对话（当时没在最近 8 个里）重新排到前面
+    let n3 = Date.now();
+    const list3 = [{ uuid: "q1", name: "旧", updated_at: "a" }];
+    const det3 = { q1: { name: "旧", current_leaf_message_uuid: "x", chat_messages: [{ uuid: "x", sender: "assistant", text: "旧回复", stop_reason: "end_turn", created_at: new Date(n3 - 3600e3).toISOString() }] } };
+    const src3 = claudeSource({ request: async (o) => (o.url.endsWith("/organizations") ? [{ uuid: "org1" }] : /\?limit/.test(o.url) ? list3 : det3[/chat_conversations\/([^?]+)/.exec(o.url)[1]]), webSession: null, getCfg: () => cfg, SK_RE: P.SK_RE, webHeaders: P.webHeaders });
+    const w3 = new ChatWatcher({ sources: [src3], now: () => n3 });
+    w3.startAt = n3 - 3 * 3600e3;
+    await w3.poll();
+    n3 += 3000;
+    list3.unshift({ uuid: "q2", name: "下午的对话", updated_at: "b" });
+    det3.q2 = { name: "下午的对话", current_leaf_message_uuid: "y", chat_messages: [{ uuid: "y", sender: "assistant", text: "20 分钟前就答完了", stop_reason: "end_turn", created_at: new Date(n3 - 20 * 60e3).toISOString() }] };
+    assert.deepStrictEqual(await w3.poll(), []);
+  }
+  ok("旧对话重新排到前面（重新打开 Claude 后同步）→ 不提醒");
+
   // 没登录 → 不查询、不报错
   const w2 = new ChatWatcher({ sources: [claudeSource({ request, webSession: null, getCfg: () => ({ providers: {} }), SK_RE: P.SK_RE, webHeaders: P.webHeaders })], log: () => {} });
   assert.deepStrictEqual(await w2.poll(), []);

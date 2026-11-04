@@ -23,6 +23,9 @@ const HEAD_BYTES = 64 * 1024;   // 历史文件：读开头拿标题
 const TAIL_BYTES = 384 * 1024;  // 历史文件：读末尾拿当前状态（标题取最后一条需求，在末尾附近）
 // 「完成」要安静 6 秒（期间日志没有任何新动作）才确认；「需要处理」0.8 秒
 const SETTLE = { done: 6000, input: 800 };
+// 日志里每行都有写入时间：超过 2 分钟的旧内容只用来建立状态，不算「刚开始」或「刚完成」。
+// 重新打开 Claude / Codex 时，旧会话会被复制成新文件（恢复会话）或被重写，以前会把整段旧对话当成新任务重放、陆续弹窗。
+const STALE_MS = 2 * 60e3;
 
 // ---------------- 文本工具 ----------------
 function clean(s) {
@@ -236,7 +239,11 @@ class TaskWatcher {
           // 启动时已存在的文件 = 历史：只建立状态。启动后才出现的文件 = 新会话：正常处理
           if (first) { this.readHistory(f, file, size); continue; }
         }
-        if (size < f.offset) { f.offset = 0; f.rest = ""; }
+        if (size < f.offset) {
+          // 文件被重写（变短）：从头再读，但之前的状态作废，旧内容不会触发提醒（见 STALE_MS）
+          f.offset = 0; f.rest = "";
+          Object.assign(f.s, { armed: false, asked: false, pending: null });
+        }
         if (size > f.offset) this.readNew(f, file, size, true);
       }
     }
@@ -316,6 +323,12 @@ class TaskWatcher {
     try { r = PARSERS[f.src.id](e, f.s); } catch { r = null; }
     if (!r) return;
     const s = f.s;
+    // 这一行的写入时间：明显是旧内容（复制 / 重写 / 恢复会话带过来的）就当历史看
+    const ts = Date.parse(e.timestamp || (e.payload && e.payload.timestamp) || "") || 0;
+    if (live && ts && ts < this.now() - STALE_MS) {
+      live = false;
+      if (r.sig === "done" || r.sig === "input") { s.lastSig = r.sig; return; } // 旧的「完成 / 需要处理」不提醒
+    }
     if (r.sig === "busy") {
       // 「完成」之后又有新动作：说明还没彻底完成（Codex 自己接着跑下一轮、还有工具在执行……），取消这次提醒
       s.pending = null;
