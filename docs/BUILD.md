@@ -23,6 +23,9 @@ Electron 版本由 `scripts/common.sh` 里的 `ELECTRON_VERSION` 指定（默认
 ./scripts/build-all.sh            # 全部
 ```
 
+**自动发布（推荐）**：改 `app/package.json` 的 `version`，在 `CHANGELOG.md` 顶部写一节 `## 版本号`，推送到 main。
+GitHub Actions（`.github/workflows/release.yml`）会跑测试、构建三个安装包并创建 Release；已发布过的版本号会自动跳过。
+
 产物：`dist/AI用量监控-mac-arm64-v{版本}.zip`、`dist/AI用量监控-mac-x64-v{版本}.zip`、`dist/AI用量监控-win-x64-v{版本}.zip`
 
 版本号来自 `app/package.json`。

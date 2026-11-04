@@ -1,5 +1,15 @@
 # 更新日志
 
+## 1.6.8
+
+- **显示 / 隐藏悬浮条快捷键**：macOS `⌃⌥⌘U`（Control+Option+Command+U），Windows `Ctrl+Alt+Shift+U`。
+  选三个修饰键的组合，避开系统和常见软件的快捷键；万一被别的软件占用，会自动换成备选（U → J → K）。
+  设置 → 外观里可以录制自己的组合键，也可以关闭。托盘菜单里的「隐藏 / 显示悬浮条」旁边会显示当前快捷键。
+- 包含 1.6.7 的 Windows 置顶修复：在装了其他置顶软件的电脑上，悬浮条不会再被盖住。
+- 自动发布：推送新版本后，GitHub Actions 会自动构建 Mac（Apple 芯片 + Intel）和 Windows 安装包并发布 Release。
+- **Hotkey to show / hide the bar**: `⌃⌥⌘U` on macOS, `Ctrl+Alt+Shift+U` on Windows (customizable in Settings).
+- Windows: the bar now stays on top even when other always-on-top apps are running.
+
 ## 1.6.7
 
 - **Windows 置顶修复**：有的电脑上悬浮条会被别的窗口盖住。原因有两个：

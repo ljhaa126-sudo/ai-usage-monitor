@@ -9,6 +9,17 @@
   let testRes = null;   // { ok, message, sample }
   let testing = false;
   let confirmDel = null;
+  let hk = { active: "", error: "", def: "" }; // 快捷键状态（主进程）
+  let hkRec = false;                           // 正在录制新快捷键
+  let recErr = "";
+  const MAC = /Mac/i.test(navigator.platform);
+  // Electron 写法 → 显示：⌃⌥⌘U / Ctrl + Alt + Shift + U
+  const prettyKey = (k) => {
+    if (!k) return "";
+    const p = k.split("+");
+    if (MAC) { const m = { Control: "⌃", Ctrl: "⌃", Alt: "⌥", Option: "⌥", Shift: "⇧", Command: "⌘", Cmd: "⌘", Super: "⌘" }; return p.map((x) => m[x] || x).join(""); }
+    return p.map((x) => (x === "Control" ? "Ctrl" : x === "Super" ? "Win" : x)).join(" + ");
+  };
 
   const HINT = {
     claude: "装了 Claude Code 会自动识别（首次会弹出钥匙串授权，选「始终允许」）。只用 Claude 网页版或桌面 App 的，点「登录网页版」登录一次即可。登录网页版后，网页版 / 桌面版 / 手机上的普通聊天回复完也会提醒。",
@@ -97,6 +108,12 @@
         <div class="row"><div class="lab">位置<small>也可以直接拖动竖条：靠近屏幕边缘松手会吸附，拖到中间就自由悬浮</small></div>${seg("pos", pos, [["right", "贴右侧"], ["left", "贴左侧"], ["float", "自由摆放"]])}</div>
         <div class="row"><div class="lab">隐藏未连接的 AI<small>竖条上只显示已登录、有数据的 AI</small></div>${sw(cfg.hideIdle, 'data-b="hideIdle"')}</div>
         <div class="row"><div class="lab">任务完成提醒<small>Codex / Claude Code / WorkBuddy / CodeBuddy / BoxAI 的任务，以及 Claude、ChatGPT 的普通聊天（需登录网页版），完成或需要你处理时在对应图标旁弹出提醒（10 秒后自动关闭）；图标上的脉冲会一直保留，直到你把鼠标移到图标上、点开提醒，或切到这个任务所在的窗口</small></div>${sw(cfg.taskNotify !== false, 'data-b="taskNotify"')}</div>
+        <div class="row"><div class="lab">显示 / 隐藏悬浮条的快捷键<small>${hkRec ? (recErr ? `<span style="color:#FF9F0A">${esc(recErr)}</span>` : "请按下新的组合键（至少两个修饰键 + 一个字母 / 数字 / F 键），按 Esc 取消") : hk.error ? `<span style="color:#FF9F0A">${esc(hk.error)}</span>` : cfg.hotkey === "off" ? "已关闭" : "在任何软件里按下都能切换悬浮条；也可以点托盘菜单"}</small></div>
+          <div style="display:flex;gap:6px;align-items:center">
+            <button class="btn gray" data-act="hk-rec" style="min-width:96px">${hkRec ? "录制中…" : cfg.hotkey === "off" ? "未设置" : esc(prettyKey(hk.active)) || "未设置"}</button>
+            ${(cfg.hotkey && !hkRec) ? `<button class="btn gray" data-act="hk-def">恢复默认</button>` : ""}
+            ${(cfg.hotkey !== "off" && !hkRec) ? `<button class="btn gray" data-act="hk-off">关闭</button>` : ""}
+          </div></div>
         <div class="row"><div class="lab">菜单栏显示最高用量</div>${sw(cfg.trayPercent, 'data-b="trayPercent"')}</div>
       </div>
       <div class="hdr">刷新</div>
@@ -156,6 +173,9 @@
     if (t.dataset.cdelask) { confirmDel = t.dataset.cdelask; return render(); }
     if (t.dataset.cdel) { const id = t.dataset.cdel; confirmDel = null; if (editing && editing.id === id) editing = null; await api.customRemove(id); return; }
     switch (t.dataset.act) {
+      case "hk-rec": if (hkRec) return stopRec(); hkRec = true; await api.hotkeyPause(true); return render();
+      case "hk-def": return save({ hotkey: "" });
+      case "hk-off": return save({ hotkey: "off" });
       case "quit": return api.quit();
       case "log": return api.openLog();
       case "c-undel": confirmDel = null; return render();
@@ -190,6 +210,41 @@
     if (t.dataset.region) save({ providers: { glm: { region: t.value } } });
   });
 
+  // ---- 录制快捷键 ----
+  async function stopRec(acc) {
+    hkRec = false;
+    recErr = "";
+    if (acc) await save({ hotkey: acc }); // 主进程会重新注册并回传状态
+    else await api.hotkeyPause(false);
+    render();
+  }
+  const KEYNAME = (e) => {
+    const c = e.code || "";
+    if (/^Key[A-Z]$/.test(c)) return c.slice(3);
+    if (/^Digit\d$/.test(c)) return c.slice(5);
+    if (/^F([1-9]|1\d|2[0-4])$/.test(c)) return c;
+    const m = { Space: "Space", Backquote: "`", Minus: "-", Equal: "=", BracketLeft: "[", BracketRight: "]", Backslash: "\\", Semicolon: ";", Quote: "'", Comma: ",", Period: ".", Slash: "/",
+      ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right", Home: "Home", End: "End", PageUp: "PageUp", PageDown: "PageDown", Insert: "Insert" };
+    return m[c] || "";
+  };
+  window.addEventListener("keydown", (e) => {
+    if (!hkRec) return;
+    e.preventDefault(); e.stopPropagation();
+    if (e.key === "Escape") return stopRec();
+    const key = KEYNAME(e);
+    if (!key) return; // 只按了修饰键：继续等
+    const mods = [];
+    if (e.ctrlKey) mods.push("Control");
+    if (e.altKey) mods.push("Alt");
+    if (e.shiftKey) mods.push("Shift");
+    if (e.metaKey) mods.push(MAC ? "Command" : "Super");
+    const fkey = /^F\d+$/.test(key);
+    // 至少两个修饰键（F 键至少一个），避免和普通快捷键冲突
+    if (mods.length < (fkey ? 1 : 2)) { recErr = "至少要两个修饰键，例如 " + (MAC ? "⌃⌥⌘ + 字母" : "Ctrl + Alt + Shift + 字母") + "；按 Esc 取消"; render(); return; }
+    stopRec([...mods, key].join("+"));
+  }, true);
+  api.onHotkey((h) => { hk = h; if (!typing()) render(); });
+
   // 正在输入时不重绘，避免光标跳动
   const typing = () => { const a = document.activeElement; return a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.tagName === "SELECT"); };
   const refreshWeb = () => api.webStatus().then((w) => { web = w; render(); });
@@ -197,5 +252,6 @@
   api.onConfig((c) => { cfg = c; if (!typing()) render(); });
   api.onWebStatus((w) => { web = w; render(); });
   api.state().then((s) => { cfg = s.cfg; list = s.list; version = s.version; refreshWeb(); });
+  api.hotkey().then((h) => { hk = h; render(); }).catch(() => {});
   window.__settingsTest = { newCustom: async (p) => { await loadPresets(); editing = { ...(presets[p] || presets.blank) }; render(); } };
 })();

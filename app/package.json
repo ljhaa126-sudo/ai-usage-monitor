@@ -1,7 +1,7 @@
 {
   "name": "ai-usage-monitor",
   "productName": "AI 用量监控",
-  "version": "1.6.7",
+  "version": "1.6.8",
   "description": "AI 用量监控（macOS 菜单栏 + 屏幕边缘悬浮条）",
   "main": "main.js",
   "author": "AI Usage Monitor",

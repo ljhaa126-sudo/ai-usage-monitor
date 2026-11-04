@@ -1,5 +1,5 @@
 "use strict";
-const { app, BrowserWindow, ipcMain, screen, shell, Menu, Tray, nativeImage, session, powerMonitor, net } = require("electron");
+const { app, BrowserWindow, ipcMain, screen, shell, Menu, Tray, nativeImage, session, powerMonitor, net, globalShortcut } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { Store } = require("./core/store");
@@ -94,6 +94,42 @@ function keepOnTop() {
   } catch { /* ignore */ }
 }
 let topTimer = null;
+
+// ---------------- 显示 / 隐藏悬浮条的快捷键 ----------------
+// 默认选三个修饰键 + U（Usage）：macOS ⌃⌥⌘U、Windows Ctrl+Alt+Shift+U。
+// 系统和常见软件（微信 / QQ 截图 Ctrl+Alt+A、输入法、Office、IDE、录屏）都不用这一组；
+// 万一被别的软件先占用了，依次换备选，设置里也可以自己改。
+const HOTKEY_DEFAULTS = process.platform === "darwin"
+  ? ["Control+Alt+Command+U", "Control+Alt+Command+J", "Control+Alt+Command+K"]
+  : ["Control+Alt+Shift+U", "Control+Alt+Shift+J", "Control+Alt+Shift+K"];
+let hotkey = { active: "", error: "", def: HOTKEY_DEFAULTS[0] }, hotkeyPaused = false;
+function toggleOverlay(why) {
+  if (!overlay || overlay.isDestroyed()) return;
+  if (overlay.isVisible()) overlay.hide();
+  else { overlay.showInactive(); keepOnTop(); }
+  log(`[ui] ${overlay.isVisible() ? "显示" : "隐藏"}悬浮条（${why}）`);
+  refreshTrayMenu();
+}
+function registerHotkey() {
+  hotkeyPaused = false;
+  try { globalShortcut.unregisterAll(); } catch { /* ignore */ }
+  const want = String(store.cfg.hotkey || "").trim();
+  hotkey = { active: "", error: "", def: HOTKEY_DEFAULTS[0] };
+  if (want === "off") { sendHotkey(); return; }
+  const tryKey = (k) => { try { return globalShortcut.register(k, () => toggleOverlay("快捷键")); } catch { return false; } };
+  if (want) {
+    if (tryKey(want)) hotkey.active = want;
+    else hotkey.error = "这个快捷键已被其他软件占用或不可用，已改用默认快捷键";
+  }
+  if (!hotkey.active) for (const k of HOTKEY_DEFAULTS) if (tryKey(k)) { hotkey.active = k; break; }
+  if (!hotkey.active && !hotkey.error) hotkey.error = "默认快捷键都被其他软件占用了，请在这里换一个";
+  log(`[ui] 快捷键 ${hotkey.active || "未注册"}${hotkey.error ? "（" + hotkey.error + "）" : ""}`);
+  sendHotkey();
+}
+function sendHotkey() {
+  if (settingsWin && !settingsWin.isDestroyed()) settingsWin.webContents.send("hotkey", hotkey);
+  if (tray) refreshTrayMenu();
+}
 function startKeepOnTop() {
   if (process.platform !== "win32" || topTimer) return;
   topTimer = setInterval(keepOnTop, 2000);
@@ -141,6 +177,8 @@ function openSettings() {
     webPreferences: { preload: path.join(__dirname, "preload.js") },
   });
   settingsWin.loadFile(path.join(__dirname, "renderer", "settings.html"));
+  // 录制快捷键时关掉了设置窗口：恢复全局快捷键
+  settingsWin.on("closed", () => { if (hotkeyPaused) registerHotkey(); });
   settingsWin.once("ready-to-show", () => {
     settingsWin.show();
     if (process.platform === "darwin") app.focus({ steal: true });
@@ -301,7 +339,7 @@ function trayIcon() {
 function buildMenu() {
   const c = store.cfg;
   return Menu.buildFromTemplate([
-    { label: overlay && overlay.isVisible() ? "隐藏悬浮条" : "显示悬浮条", click: () => { if (overlay.isVisible()) overlay.hide(); else { overlay.showInactive(); keepOnTop(); } refreshTrayMenu(); } },
+    { label: overlay && overlay.isVisible() ? "隐藏悬浮条" : "显示悬浮条", click: () => { if (overlay.isVisible()) overlay.hide(); else { overlay.showInactive(); keepOnTop(); } refreshTrayMenu(); }, accelerator: hotkey.active || undefined, registerAccelerator: false },
     { label: "立即刷新", accelerator: "CmdOrCtrl+R", click: () => engine.refreshNow() },
     { type: "separator" },
     { label: "展示样式", submenu: [
@@ -352,6 +390,7 @@ function updateCfg(patch) {
   store.saveCfg();
   if (patch.autoStart !== undefined && process.platform !== "linux") app.setLoginItemSettings({ openAtLogin: !!store.cfg.autoStart, openAsHidden: true });
   if (patch.proxy !== undefined) applyProxy();
+  if (patch.hotkey !== undefined) registerHotkey();
   if (structural || patch.refreshSeconds || patch.smartRefresh !== undefined || patch.proxy !== undefined) engine.resetSchedule();
   if (before !== JSON.stringify(store.cfg)) { sendConfig(); refreshTrayMenu(); broadcast(); }
 }
@@ -395,6 +434,9 @@ function ipc() {
   ipcMain.handle("pulses", () => pulses);
   ipcMain.handle("open-settings", () => openSettings());
   ipcMain.handle("save-config", (_e, patch) => updateCfg(patch));
+  ipcMain.handle("hotkey", () => hotkey);
+  // 设置里录制新快捷键时先暂停全局快捷键，否则按下当前组合会被它截走
+  ipcMain.handle("hotkey-pause", (_e, on) => { if (on) { hotkeyPaused = true; try { globalShortcut.unregisterAll(); } catch { /* ignore */ } } else registerHotkey(); });
   ipcMain.handle("login", (_e, id, idp) => openLogin(id, idp));
   ipcMain.handle("logout", (_e, id) => logoutWeb(id));
   ipcMain.handle("web-status", () => webStatus());
@@ -630,6 +672,7 @@ app.whenReady().then(async () => {
   }
   engine.start();
   startTaskWatcher();
+  registerHotkey();
   log(`==== 启动 v${app.getVersion()} ${process.platform} ${process.arch}`);
   if (process.env.AIMON_OPEN_SETTINGS) openSettings();
 
@@ -648,4 +691,5 @@ app.whenReady().then(async () => {
 
 app.on("second-instance", () => { if (overlay) { overlay.showInactive(); keepOnTop(); } openSettings(); });
 app.on("window-all-closed", (e) => e.preventDefault());
+app.on("will-quit", () => { try { globalShortcut.unregisterAll(); } catch { /* ignore */ } });
 app.on("will-quit", () => { try { if (fgWatcher) fgWatcher.stop(); if (winActivator) winActivator.stop(); } catch { /* ignore */ } });

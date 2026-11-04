@@ -1,0 +1,96 @@
+# 自动发布：推送到 main 后，如果 app/package.json 里的版本号还没有对应的 Release，
+# 就在 GitHub 的服务器上构建 Mac（Apple 芯片 + Intel）和 Windows 安装包，并创建 Release、上传安装包。
+# 发新版只需要：改 app/package.json 的 version，在 CHANGELOG.md 顶部写一节「## 版本号」，推送即可。
+# 也可以在仓库的 Actions 页面手动运行（Run workflow）。
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths: ["app/**", "scripts/**", "CHANGELOG.md", ".github/workflows/release.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 读取版本号，检查是否已发布
+        id: ver
+        run: |
+          V=$(python3 -c "import json;print(json.load(open('app/package.json'))['version'])")
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          if gh release view "v$V" >/dev/null 2>&1; then
+            echo "v$V 已经发布过，跳过"; echo "skip=1" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 安装构建工具（rcodesign：Mac 签名；go-winres：Windows 图标）
+        if: steps.ver.outputs.skip != '1'
+        run: |
+          curl -fsSL -o /tmp/rcs.tgz "https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign%2F0.29.0/apple-codesign-0.29.0-x86_64-unknown-linux-musl.tar.gz"
+          tar xzf /tmp/rcs.tgz -C /tmp
+          sudo install /tmp/apple-codesign-0.29.0-x86_64-unknown-linux-musl/rcodesign /usr/local/bin/
+          go install github.com/tc-hib/go-winres@v0.3.3
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: 运行测试
+        if: steps.ver.outputs.skip != '1'
+        run: |
+          node test/providers.test.js
+          node test/engine.test.js
+          node test/v165.test.js "$PWD/app"
+          node test/chat.test.js "$PWD/app"
+
+      - name: 构建 Mac（arm64 + x64）和 Windows（x64）
+        if: steps.ver.outputs.skip != '1'
+        run: |
+          chmod +x scripts/*.sh
+          ./scripts/build-mac.sh all
+          ./scripts/build-win.sh
+          ls -la dist/*.zip
+
+      - name: 生成发布说明（取 CHANGELOG.md 里这个版本的那一节）
+        if: steps.ver.outputs.skip != '1'
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          python3 - "$V" > notes.md <<'PY'
+          import re, sys
+          v = sys.argv[1]
+          s = open("CHANGELOG.md", encoding="utf-8").read()
+          m = re.search(r"^## " + re.escape(v) + r"\b.*?$(.*?)(?=^## |\Z)", s, re.S | re.M)
+          body = m.group(1).strip() if m else "（见 CHANGELOG.md）"
+          print(f"""## 下载 / Download
+
+          | 系统 / System | 文件 / File |
+          |---|---|
+          | Mac（Apple 芯片：M1/M2/M3/M4…）| `AI用量监控-mac-arm64-v{v}.zip` |
+          | Mac（Intel）| `AI用量监控-mac-x64-v{v}.zip` |
+          | Windows 10 / 11（64 位）| `AI用量监控-win-x64-v{v}.zip` |
+
+          **Mac**：解压后把「AI Usage Monitor」拖进「应用程序」，在终端运行一次 / then run once in Terminal:
+          `xattr -cr "/Applications/AI Usage Monitor.app"`
+
+          **Windows**：解压到固定文件夹，双击 `AI Usage Monitor.exe`；如提示「Windows 已保护你的电脑」，点「更多信息 → 仍要运行」。
+
+          ## 更新内容 / What's new
+
+          {body}
+          """.replace("\n          ", "\n"))
+          PY
+          cat notes.md
+
+      - name: 创建 Release 并上传安装包
+        if: steps.ver.outputs.skip != '1'
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          gh release create "v$V" dist/*.zip --target "$GITHUB_SHA" --title "v$V" --notes-file notes.md
