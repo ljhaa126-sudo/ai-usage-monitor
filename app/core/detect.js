@@ -69,8 +69,12 @@ function groupsFromEnv(env, from) {
     if (typeof v !== "string") continue;
     if (/^KIMI(_CODE)?_API_KEY$/.test(k)) g.push({ base: "api.kimi.com", key: v, from });
     if (/^MOONSHOT_API_KEY$/.test(k)) g.push({ base: "api.moonshot.cn", key: v, from });
+    if (/^DEEPSEEK_API_KEY$/.test(k)) g.push({ base: "api.deepseek.com", key: v, from });
+    if (/^(HUNYUAN|TOKENHUB)_API_KEY$/.test(k)) g.push({ base: "tokenhub.tencentmaas.com", key: v, from });
     if (/^(ZHIPUAI|ZHIPU|GLM|BIGMODEL|ZAI)_API_KEY$/.test(k)) g.push({ base: /^ZAI/.test(k) ? "z.ai" : "bigmodel", key: v, from });
   }
+  // 腾讯云 API 密钥（查混元额度用）
+  if (env.TENCENTCLOUD_SECRET_ID && env.TENCENTCLOUD_SECRET_KEY) g.push({ base: "tencentcloud", key: env.TENCENTCLOUD_SECRET_ID + " " + env.TENCENTCLOUD_SECRET_KEY, from });
   return g;
 }
 
@@ -120,7 +124,17 @@ function findApiKeys(env = process.env) {
       }
     }
   }
-  const ok = groups.map((g) => ({ ...g, key: String(g.key || "").trim(), b: String(g.base || "").toLowerCase() })).filter((g) => KEYISH.test(g.key));
+  // 腾讯云命令行工具 tccli、腾讯云 SDK 的凭据文件
+  for (const n of (() => { try { return fs.readdirSync(path.join(h, ".tccli")).filter((x) => /\.credential$/.test(x)); } catch { return []; } })()) {
+    const j = readJ(path.join(h, ".tccli", n));
+    if (j && j.secretId && j.secretKey) groups.push({ base: "tencentcloud", key: j.secretId + " " + j.secretKey, from: "tccli" });
+  }
+  {
+    const t = readText(path.join(h, ".tencentcloud", "credentials"));
+    const id = /secret_id\s*=\s*(\S+)/i.exec(t), sk = /secret_key\s*=\s*(\S+)/i.exec(t);
+    if (id && sk) groups.push({ base: "tencentcloud", key: id[1] + " " + sk[1], from: "腾讯云 SDK 凭据" });
+  }
+  const ok = groups.map((g) => ({ ...g, key: String(g.key || "").trim(), b: String(g.base || "").toLowerCase() })).filter((g) => KEYISH.test(g.key) || (g.b === "tencentcloud" && /^AKID[A-Za-z0-9]{8,} [A-Za-z0-9]{16,}$/.test(g.key)));
   const out = {};
   // Kimi：Kimi Code 套餐的地址（api.kimi.com）优先于普通开放平台（moonshot）
   const kscore = (g) => (/kimi\.com/.test(g.b) ? 2 : 0) + (/^sk-kimi-/.test(g.key) ? 1 : 0);
@@ -128,6 +142,13 @@ function findApiKeys(env = process.env) {
   if (kimi) out.kimi = { apiKey: kimi.key, from: kimi.from };
   const glm = ok.find((g) => /bigmodel|zhipu|z\.ai/.test(g.b));
   if (glm) out.glm = { apiKey: glm.key, region: /z\.ai/.test(glm.b) ? "global" : "cn", from: glm.from };
+  const ds = ok.find((g) => /deepseek/.test(g.b));
+  if (ds) out.deepseek = { apiKey: ds.key, from: ds.from };
+  const tc = ok.find((g) => g.b === "tencentcloud");
+  if (tc) out.hunyuan = { apiKey: tc.key, from: tc.from };
+  // 只有调用混元模型的 Key（查不了额度）：记为「检测到」，提示补充腾讯云 API 密钥
+  const hy = ok.find((g) => /tencentmaas|hunyuan/.test(g.b));
+  if (hy && !tc) Object.defineProperty(out, "_hints", { value: { hunyuan: "混元 API Key（" + hy.from + "），查额度还需要腾讯云 API 密钥" }, enumerable: false });
   return out;
 }
 
@@ -214,7 +235,8 @@ class Detector extends EventEmitter {
     }
     let keys = {};
     try { keys = findApiKeys(); } catch (e) { this.log("[detect] 查找 API Key 失败 " + e.message); }
-    for (const [id, k] of Object.entries(keys)) found[id] = "API Key（" + k.from + "）";
+    for (const [id, k] of Object.entries(keys)) found[id] = (id === "hunyuan" ? "腾讯云 API 密钥（" : "API Key（") + k.from + "）";
+    for (const [id, how] of Object.entries(keys._hints || {})) if (!found[id]) found[id] = how;
     const keyChanged = JSON.stringify(keys) !== JSON.stringify(this.keys);
     this.keys = keys;
     this.found = found;

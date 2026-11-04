@@ -1,5 +1,14 @@
 # 更新日志
 
+## 1.7.1
+
+- **新增 DeepSeek**：显示开放平台账户余额（竖条上直接显示金额，如 ¥86.50；余额用完圆环变红）。
+  自动从环境变量 DEEPSEEK_API_KEY、shell 配置文件、Claude Code / cc-switch 里接入 DeepSeek 的配置找 API Key。
+- **新增腾讯混元**（腾讯云 TokenHub · Token Plan 套餐额度）：
+  按腾讯云规定，额度只能用腾讯云 API 密钥（SecretId / SecretKey）查询，调用模型的 API Key 查不了。
+  自动读取 tccli、腾讯云 SDK 凭据文件和环境变量 TENCENTCLOUD_SECRET_ID / KEY；只找到混元调用 Key 时显示「检测到」并提示补充密钥。
+- **New providers**: DeepSeek (account balance) and Tencent Hunyuan (TokenHub Token Plan quota, via Tencent Cloud API credentials).
+
 ## 1.7.0
 
 - **设置界面配合自动识别重新整理**（AI 账号部分）：

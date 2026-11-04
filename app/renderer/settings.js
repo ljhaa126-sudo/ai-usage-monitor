@@ -33,6 +33,8 @@
     kimi: "在 kimi.com/code 控制台创建 API Key 后填入。",
     glm: "填写 GLM Coding Plan 的 API Key；z.ai 国际版请选「国际」。",
     boxai: "自动读取本机 Box 登录的 RTX 账号，查询本月个人 Token 额度（需连接公司内网 / iOA）。",
+    deepseek: "DeepSeek 开放平台按量付费，显示账户余额。会自动从环境变量 DEEPSEEK_API_KEY、shell 配置文件、Claude Code / cc-switch 里接入 DeepSeek 的配置找 API Key；找不到时在这里填。",
+    hunyuan: "腾讯云 TokenHub 的混元 Token Plan 额度。按腾讯云规定，额度只能用腾讯云 API 密钥查询（调用模型的 API Key 查不了）：会自动读取 tccli 和环境变量 TENCENTCLOUD_SECRET_ID / TENCENTCLOUD_SECRET_KEY；也可以在这里填「SecretId SecretKey」。建议用只读子账号的密钥（权限 QcloudTokenHubReadOnlyAccess）。",
     tokendash: "读取腾讯官方「用量健康助手」(Tencent Token Dashboard) 的本地登录态，显示全公司 AI Token 的本月用量（人民币）。需先安装并登录过那个助手；它的登录每隔约两小时自动续，半个月后需重新登录一次。",
     workbuddy: "腾讯员工是企业 SSO 账号，需在企业专属站点走 iOA 登录（手机号 / 微信登录的是另一个账号，查不到企业额度）。若登录窗口空白，说明 iOA 拦截了本程序访问内网，需要在 iOA 里给「AI Usage Monitor.exe」授信。",
   };
@@ -158,7 +160,7 @@
         <div class="row"><div class="lab" style="flex:none">网络代理</div><input data-proxy="1" placeholder="留空 = 跟随系统代理；例：127.0.0.1:7890；填 direct 不走代理" value="${esc(cfg.proxy || "")}" spellcheck="false" /></div>
       </div>
       <div class="hdr">AI 账号与顺序</div>
-      <div class="hint" style="margin-top:0">本机的 AI 会自动识别并接入，不用手动配置：已登录的 Claude Code / Codex / Cursor / Gemini CLI / Copilot、Claude 桌面版的登录、Claude Code 或 cc-switch 里配置的 Kimi / 智谱 GLM Key、腾讯 Box 客户端和「用量健康助手」（token.woa.com）都会自动读取。之后新装或第一次登录的 AI 几秒内会自动出现。「手动设置」只在自动识别不到时才需要。</div>
+      <div class="hint" style="margin-top:0">本机的 AI 会自动识别并接入，不用手动配置：已登录的 Claude Code / Codex / Cursor / Gemini CLI / Copilot、Claude 桌面版的登录、Claude Code 或 cc-switch 里配置的 Kimi / 智谱 GLM / DeepSeek Key、tccli 里的腾讯云密钥（混元）、腾讯 Box 客户端和「用量健康助手」（token.woa.com）都会自动读取。之后新装或第一次登录的 AI 几秒内会自动出现。「手动设置」只在自动识别不到时才需要。</div>
       <div class="grp">${provs}${addRow}</div>
       ${missingGrp}
       <div class="foot"><span>版本 ${esc(version)} · <span class="link" data-act="log">查看日志</span></span><button class="btn red" data-act="quit">退出程序</button></div>`;

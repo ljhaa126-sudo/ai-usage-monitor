@@ -83,7 +83,7 @@
       const pu = pulses[s.id];
       el.classList.toggle("notify", !!pu);
       el.classList.toggle("need", !!pu && pu.kind === "input");
-      el.querySelector(".pct").textContent = loading ? "…" : ok ? Math.round(v) + "%" : "—";
+      el.querySelector(".pct").textContent = loading ? "…" : ok ? (s.headlineText || Math.round(v) + "%") : "—"; // 余额类（DeepSeek）显示金额
       let dot = el.querySelector(".dot");
       const want = s.state === "error" || s.state === "stale" ? "dot err" : s.state === "nologin" ? "dot" : "";
       if (want && !dot) { dot = document.createElement("span"); el.appendChild(dot); }
@@ -189,7 +189,12 @@
     for (const w of rows(s)) {
       const v = w.usedPercent;
       const unl = w.detail === "不限";
-      h += `<div class="sec"><div class="l"><span>${esc(w.label)}</span><span class="num" ${unl || !w.resetsAt ? "" : `data-cd="${w.resetsAt}" data-fmt="reset"`}>${unl ? "" : resetText(w)}</span></div>
+      if (w.key === "balance") { // 余额类（DeepSeek）：没有百分比，只显示余额
+        h += `<div class="sec"><div class="l"><span>${esc(w.label)}</span><span class="num">${v >= 100 ? "已用完" : ""}</span></div>
+        <div class="u num" style="font-size:15px;color:${v >= 100 ? "#FF453A" : "#fff"}">${esc(w.detail || "")}</div></div>`;
+        continue;
+      }
+      h += `<div class="sec"><div class="l"><span>${esc(w.label)}</span><span class="num" ${unl || !w.resetsAt ? "" : `data-cd="${w.resetsAt}" data-fmt="reset"`}>${unl || !w.resetsAt ? "" : resetText(w)}</span></div>
         <div class="track"><div class="fill" style="width:${unl ? 0 : Math.max(v > 0 ? 2 : 0, v)}%;background:${color(v)}"></div></div>
         <div class="u num">${unl ? "不限量" : `已用 ${Math.round(v)}%`}${w.detail && !unl ? `<span style="color:rgba(235,235,245,.45)"> · ${esc(w.detail)}</span>` : ""}</div></div>`;
     }
@@ -353,7 +358,10 @@
         const e = main.windowMinutes * 60000 - (main.resetsAt - Date.now());
         if (e > 0) { const m = Math.floor(e / 60000); elapsed = m >= 60 ? `${Math.floor(m / 60)}小时${m % 60}分` : `${m}分钟`; }
       }
-      hero = `<div class="grp pd"><div class="hero"><div class="t"><div class="k">${esc(main.label)}</div>
+      if (main.key === "balance") hero = `<div class="grp pd"><div class="hero"><div class="t"><div class="k">${esc(main.label)}</div>
+        <div class="v num" style="color:${v >= 100 ? "#FF453A" : "#fff"}">${esc(s.headlineText || "")}</div>
+        <div class="s">${esc(main.detail || "")}</div></div></div></div>`;
+      else hero = `<div class="grp pd"><div class="hero"><div class="t"><div class="k">${esc(main.label)}</div>
         <div class="v num" style="color:${v >= 70 ? color(v) : "#fff"}">${P(v).replace("%", "")}<small>% 已用</small></div>
         <div class="s">${main.detail ? esc(main.detail) + " · " : ""}剩余 ${P(100 - v)}</div></div><div class="bigring">${bigRing(v)}</div></div>
         <div class="meta"><span class="num" ${main.resetsAt ? `data-cd="${main.resetsAt}" data-fmt="left"` : ""}>${main.resetsAt ? left(main.resetsAt - Date.now()) : "重置时间未知"}</span><span>${elapsed ? `窗口已过 <b>${elapsed}</b>` : main.resetsAt ? `<b>${window.UI.at(main.resetsAt)}</b>` : ""}</span></div></div>`;

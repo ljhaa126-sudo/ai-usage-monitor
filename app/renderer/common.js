@@ -14,6 +14,8 @@ window.UI = (() => {
     boxai: '<path d="M12 2.8 20.2 7.4v9.2L12 21.2 3.8 16.6V7.4Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M3.8 7.4 12 12l8.2-4.6M12 12v9.2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/>',
     workbuddy: '<path d="M3.5 6.5 7 18l5-9 5 9 3.5-11.5" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>',
     plus: '<path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>',
+    deepseek: '<path d="M3 13.5c2.2-2.6 4.4-2.6 6.6 0s4.4 2.6 6.6 0 3.3-2 4.8-1.2M3 9c2.2-2.6 4.4-2.6 6.6 0s4.4 2.6 6.6 0 3.3-2 4.8-1.2M3 18c2.2-2.6 4.4-2.6 6.6 0s4.4 2.6 6.6 0 3.3-2 4.8-1.2" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>',
+    hunyuan: '<circle cx="12" cy="12" r="8.6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 3.4a4.3 4.3 0 0 1 0 8.6 4.3 4.3 0 0 0 0 8.6" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="7.7" r="1.3" fill="currentColor"/><circle cx="12" cy="16.3" r="1.3" fill="currentColor"/>',
     codebuddy: '<path d="M16.5 7.2A6.4 6.4 0 1 0 16.5 16.8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="12" r="1.7" fill="currentColor"/>',
   };
   // 自定义工具：用名字首字母画一个圆角方块图标

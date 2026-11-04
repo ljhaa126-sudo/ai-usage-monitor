@@ -16,7 +16,7 @@ const { activeDays } = require("./store");
 const { claudeDirs, codexHome } = require("./locallogs");
 const { home, appSupport } = require("./util");
 
-const MIN_GAP = { claude: 10000, codex: 3000, cursor: 15000, gemini: 15000, copilot: 20000, kimi: 5000, glm: 5000, boxai: 60000, tokendash: 60000, workbuddy: 60000 };
+const MIN_GAP = { claude: 10000, codex: 3000, cursor: 15000, gemini: 15000, copilot: 20000, kimi: 5000, glm: 5000, deepseek: 15000, hunyuan: 30000, boxai: 60000, tokendash: 60000, workbuddy: 60000 };
 const DEFAULT_GAP = 10000;
 const IDLE_INTERVAL = 120000;     // 闲置时的刷新间隔
 const ACTIVE_WINDOW = 5 * 60000;  // 最近 5 分钟有活动算「正在使用」

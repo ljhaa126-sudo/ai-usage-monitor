@@ -4,7 +4,7 @@ const path = require("path");
 const { readJSON, dayKey } = require("./util");
 const { sanitize } = require("./custom");
 
-const PROVIDER_IDS = ["claude", "codex", "cursor", "gemini", "copilot", "kimi", "glm", "boxai", "tokendash", "workbuddy"];
+const PROVIDER_IDS = ["claude", "codex", "cursor", "gemini", "copilot", "kimi", "glm", "deepseek", "hunyuan", "boxai", "tokendash", "workbuddy"];
 // 新增的内置 AI 默认关闭，避免老用户升级后竖条突然多出图标
 const DEFAULT_OFF = ["workbuddy"];
 

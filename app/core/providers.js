@@ -14,6 +14,8 @@ const DEFS = [
   { id: "copilot", name: "GitHub Copilot", short: "Copilot", tagline: "高级请求 · 每月重置", color: "#E8EAED", dashboard: "https://github.com/settings/copilot/features", keyKind: "可选：GitHub Token" },
   { id: "kimi", name: "Kimi Code", short: "Kimi", tagline: "Moonshot · Coding 套餐", color: "#F06B8A", dashboard: "https://www.kimi.com/code/console", keyKind: "API Key（必填）" },
   { id: "glm", name: "智谱 GLM", short: "GLM", tagline: "GLM Coding Plan", color: "#3E7BFA", dashboard: "https://bigmodel.cn/coding-plan/personal/usage", keyKind: "API Key（必填）" },
+  { id: "deepseek", name: "DeepSeek", short: "DeepSeek", tagline: "DeepSeek 开放平台 · 账户余额", color: "#4D6BFE", dashboard: "https://platform.deepseek.com/usage", keyKind: "API Key（自动识别不到时再填）" },
+  { id: "hunyuan", name: "腾讯混元", short: "混元", tagline: "腾讯云 TokenHub · Token Plan", color: "#2F7BFF", dashboard: "https://console.cloud.tencent.com/tokenhub", keyKind: "腾讯云 SecretId 和 SecretKey（空格隔开）" },
 ];
 
 const W = (key, label, usedPercent, resetsAt, windowMinutes, detail) => ({ key, label, usedPercent: clamp(usedPercent), resetsAt: resetsAt || 0, windowMinutes: windowMinutes || 0, detail: detail || "" });
@@ -611,7 +613,100 @@ async function fetchGLM(cfg) {
   return st;
 }
 
-const FETCHERS = { claude: fetchClaude, codex: fetchCodex, cursor: fetchCursor, gemini: fetchGemini, copilot: fetchCopilot, kimi: fetchKimi, glm: fetchGLM };
+// ======================= DeepSeek =======================
+// 官方余额接口：GET https://api.deepseek.com/user/balance（Bearer API Key）
+// DeepSeek 是按量付费，没有「额度百分比」，显示账户余额；余额用完时圆环显示为满（红色）。
+async function fetchDeepSeek(cfg) {
+  const st = { historyUnit: "峰值 %" };
+  const key = (cfg.apiKey || "").trim() || process.env.DEEPSEEK_API_KEY;
+  if (!key) throw new NoLogin("没有找到 DeepSeek 的 API Key（会自动从环境变量、Claude Code / cc-switch 配置里找）");
+  let d;
+  try { d = await requestJSON({ url: "https://api.deepseek.com/user/balance", headers: { Authorization: "Bearer " + key } }); }
+  catch (e) { if (e.auth) throw new NoLogin("DeepSeek API Key 无效"); throw e; }
+  const infos = Array.isArray(d.balance_infos) ? d.balance_infos : [];
+  const b = infos.find((x) => x.currency === "CNY") || infos[0];
+  if (!b) throw new Error("DeepSeek 返回了无法识别的余额格式");
+  const sym = b.currency === "USD" ? "$" : "¥";
+  const total = Number(b.total_balance) || 0, granted = Number(b.granted_balance) || 0, topped = Number(b.topped_up_balance) || 0;
+  const empty = d.is_available === false || total <= 0;
+  st.source = "DeepSeek 余额接口";
+  st.plan = "按量付费";
+  st.headlineText = sym + (total >= 1000 ? Math.round(total) : total.toFixed(total >= 100 ? 0 : 2));
+  st.primary = { key: "balance", label: "账户余额", usedPercent: empty ? 100 : 0, resetsAt: 0, windowMinutes: 0, detail: `余额 ${sym}${total.toFixed(2)}${granted ? `（赠送 ${sym}${granted.toFixed(2)}，充值 ${sym}${topped.toFixed(2)}）` : ""}` };
+  if (empty) st.message = "余额已用完，DeepSeek API 将无法调用";
+  return st;
+}
+
+// ======================= 腾讯混元（腾讯云 TokenHub · Token Plan）=======================
+// 额度只能用腾讯云 API 密钥（SecretId / SecretKey）查询，调用模型用的 API Key 查不了（腾讯云的规定）。
+// 接口：tokenhub.tencentcloudapi.com DescribeTokenPlanList（版本 2026-03-22），TC3-HMAC-SHA256 签名。
+function tc3Headers({ secretId, secretKey, service, host, action, version, region, payload, ts, signAction = true, debug }) {
+  const crypto = require("crypto");
+  const sha = (s) => crypto.createHash("sha256").update(s, "utf8").digest("hex");
+  const hmac = (k, s, enc) => crypto.createHmac("sha256", k).update(s, "utf8").digest(enc);
+  ts = ts || Math.floor(Date.now() / 1000);
+  const date = new Date(ts * 1000).toISOString().slice(0, 10);
+  const ct = "application/json; charset=utf-8";
+  const signedHeaders = signAction ? "content-type;host;x-tc-action" : "content-type;host";
+  const canonical = `POST\n/\n\ncontent-type:${ct}\nhost:${host}\n${signAction ? `x-tc-action:${action.toLowerCase()}\n` : ""}\n${signedHeaders}\n${sha(payload)}`;
+  if (debug) debug({ payloadHash: sha(payload), canonicalHash: sha(canonical) });
+  const scope = `${date}/${service}/tc3_request`;
+  const toSign = `TC3-HMAC-SHA256\n${ts}\n${scope}\n${sha(canonical)}`;
+  const kSigning = hmac(hmac(hmac("TC3" + secretKey, date), service), "tc3_request");
+  const sig = hmac(kSigning, toSign, "hex");
+  return {
+    Authorization: `TC3-HMAC-SHA256 Credential=${secretId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${sig}`,
+    "Content-Type": ct, "X-TC-Action": action, "X-TC-Timestamp": String(ts), "X-TC-Version": version, "X-TC-Region": region,
+  };
+}
+async function tencentCloud(cred, action, params = {}) {
+  const host = "tokenhub.tencentcloudapi.com";
+  const payload = JSON.stringify(params);
+  const headers = tc3Headers({ ...cred, service: "tokenhub", host, action, version: "2026-03-22", region: "ap-guangzhou", payload });
+  const d = await requestJSON({ url: "https://" + host, method: "POST", headers, body: payload });
+  const r = (d && d.Response) || {};
+  if (r.Error) {
+    const code = String(r.Error.Code || "");
+    if (/^AuthFailure/.test(code)) throw new NoLogin("腾讯云 API 密钥无效或已过期（" + code + "）");
+    if (/UnauthorizedOperation/.test(code)) throw new Error("这个腾讯云密钥没有查询 TokenHub 的权限（需要 QcloudTokenHubReadOnlyAccess 或主账号密钥）");
+    throw new Error(`腾讯云返回错误 ${code}：${r.Error.Message || ""}`);
+  }
+  return r;
+}
+function hunyuanCred(cfg) {
+  const m = /(AKID[A-Za-z0-9]{8,})[\s:,;|]+([A-Za-z0-9]{16,})/.exec(String(cfg.apiKey || ""));
+  if (m) return { secretId: m[1], secretKey: m[2] };
+  if (process.env.TENCENTCLOUD_SECRET_ID && process.env.TENCENTCLOUD_SECRET_KEY) return { secretId: process.env.TENCENTCLOUD_SECRET_ID, secretKey: process.env.TENCENTCLOUD_SECRET_KEY };
+  return null;
+}
+async function fetchHunyuan(cfg) {
+  const st = { historyUnit: "峰值 %" };
+  const cred = hunyuanCred(cfg);
+  if (!cred) throw new NoLogin("查询混元额度需要腾讯云 API 密钥（SecretId / SecretKey）：会自动读取 tccli 的配置和环境变量，也可以在「手动设置」里填写");
+  const r = await tencentCloud(cred, "DescribeTokenPlanList", { Offset: 0, Limit: 20 });
+  // 列表字段名以接口实际返回为准：取第一个「元素带 TeamId」的数组
+  const plans = Object.values(r).find((v) => Array.isArray(v) && v.some((x) => x && x.TeamId)) || [];
+  const live = plans.filter((p) => p.Status !== "disable" && p.StopReason !== "DESTROYED");
+  const p = (live.length ? live : plans).sort((a, b) => Date.parse((b.PackageInfo || {}).ExpireTime || 0) - Date.parse((a.PackageInfo || {}).ExpireTime || 0))[0];
+  if (!p) throw new NoLogin("这个腾讯云账号下还没有混元 Token Plan 套餐");
+  const pk = p.PackageInfo || {};
+  const unit = p.ProductType === "enterprise-auto" ? "tokens" : "credits";
+  const total = Number(pk.TotalQuota) || 0, used = Number(pk.TotalUsed) || 0;
+  st.source = "腾讯云 TokenHub";
+  st.plan = p.Name || "Token Plan";
+  st.account = p.Uin || "";
+  st.planEndsAt = parseTime(pk.ExpireTime);
+  const fmtQ = (n) => (n >= 1e8 ? (n / 1e8).toFixed(2) + " 亿" : n >= 1e4 ? (n / 1e4).toFixed(1) + " 万" : String(Math.round(n)));
+  const exp = parseTime(pk.ExpireTime);
+  const expTxt = exp ? `，${new Date(exp).getFullYear()}-${String(new Date(exp).getMonth() + 1).padStart(2, "0")}-${String(new Date(exp).getDate()).padStart(2, "0")} 到期` : "";
+  // 套餐到期时间不是「额度重置」，不放进倒计时
+  st.primary = { key: "plan", label: "Token Plan · 套餐额度", usedPercent: total > 0 ? clamp((used / total) * 100) : 0, resetsAt: 0, windowMinutes: 0, detail: `已用 ${fmtQ(used)} / ${fmtQ(total)} ${unit}${expTxt}` };
+  if (p.StopReason === "EXHAUSTED") st.message = "套餐额度已用完";
+  else if (p.Status === "disable") st.message = "套餐已停用（" + (p.StopReason || "") + "）";
+  return st;
+}
+
+const FETCHERS = { claude: fetchClaude, codex: fetchCodex, cursor: fetchCursor, gemini: fetchGemini, copilot: fetchCopilot, kimi: fetchKimi, glm: fetchGLM, deepseek: fetchDeepSeek, hunyuan: fetchHunyuan };
 
 const RESETTERS = { codex: consumeCodexReset };
 
@@ -628,4 +723,4 @@ function chatgptReq(url, auth) { return codexReq(url, auth); }
 // 登录网页版 / 手动刷新后：立即重新尝试在线接口（不用等 15 分钟）
 function resetCodexBlock() { codexBlockedUntil = 0; codexApiAt = 0; codexWay = null; }
 
-module.exports = { DEFS, FETCHERS, RESETTERS, resetCodexBlock, chatgptAuth, chatgptReq, webHeaders, SK_RE };
+module.exports = { tc3Headers, DEFS, FETCHERS, RESETTERS, resetCodexBlock, chatgptAuth, chatgptReq, webHeaders, SK_RE };
