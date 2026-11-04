@@ -21,7 +21,8 @@ All data stays on your machine.
 
 ## 下载
 
-到 [Releases](../../releases) 下载最新版：`AI用量监控-mac-arm64-*.zip`（Apple 芯片 Mac）、`AI用量监控-win-x64-*.zip`（Windows 10/11）。
+到 [Releases](../../releases) 下载最新版：`AI-Usage-Monitor-mac-arm64-*.zip`（Apple 芯片 Mac）、`AI-Usage-Monitor-mac-x64-*.zip`（Intel Mac）、`AI-Usage-Monitor-win-x64-*.zip`（Windows 10/11）。
+新版本由 GitHub Actions 自动构建发布：改 `app/package.json` 的版本号、在 `CHANGELOG.md` 写好这一版的说明，推送即可。
 Mac 首次打开如提示「已损坏」，运行一次 `xattr -cr "/Applications/AI Usage Monitor.app"`（见 [Mac 安装说明](docs/Mac版安装说明.txt)）。
 
 ![预览](docs/images/preview.png)
