@@ -71,20 +71,39 @@ function createOverlay() {
     show: false,
     webPreferences: { preload: path.join(__dirname, "preload.js"), backgroundThrottling: false },
   });
-  overlay.setAlwaysOnTop(true, "floating");
+  // 注意：Windows 上 "floating" 这一档会被 Electron 放到任务栏「后面」，容易被其他置顶窗口盖住；Windows 用最高的 "screen-saver"
+  overlay.setAlwaysOnTop(true, process.platform === "win32" ? "screen-saver" : "floating");
   if (process.platform === "darwin") overlay.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
   overlay.setIgnoreMouseEvents(true, { forward: true });
   overlay.loadFile(path.join(__dirname, "renderer", "overlay.html"));
   overlay.once("ready-to-show", () => {
     overlay.showInactive();
+    startKeepOnTop();
     if (SHOT) setTimeout(() => shot(), Number(process.env.AIMON_SHOT_DELAY || 1500));
   });
+}
+
+// Windows：所有「置顶」窗口在同一层里，谁最后被激活谁在上面。悬浮条为了不抢焦点不会被激活，
+// 一旦被别的置顶程序（微信 / 企业微信 / 钉钉的悬浮窗、输入法工具栏、录屏工具、安全软件悬浮球、全屏播放……）盖住就回不来。
+// 所以在切换窗口、唤醒、解锁、换屏时，以及每 2 秒，重新把它提到置顶层最上面（不会抢焦点、不影响打字）。
+function keepOnTop() {
+  if (process.platform !== "win32" || !overlay || overlay.isDestroyed() || !overlay.isVisible()) return;
+  try {
+    overlay.setAlwaysOnTop(true, "screen-saver");
+    overlay.moveTop();
+  } catch { /* ignore */ }
+}
+let topTimer = null;
+function startKeepOnTop() {
+  if (process.platform !== "win32" || topTimer) return;
+  topTimer = setInterval(keepOnTop, 2000);
 }
 
 function fitOverlay() {
   if (!overlay || overlay.isDestroyed()) return;
   const d = targetDisplay();
   overlay.setBounds(d.workArea);
+  keepOnTop();
   overlay.webContents.send("config", store.cfg);
 }
 
@@ -282,7 +301,7 @@ function trayIcon() {
 function buildMenu() {
   const c = store.cfg;
   return Menu.buildFromTemplate([
-    { label: overlay && overlay.isVisible() ? "隐藏悬浮条" : "显示悬浮条", click: () => { if (overlay.isVisible()) overlay.hide(); else overlay.showInactive(); refreshTrayMenu(); } },
+    { label: overlay && overlay.isVisible() ? "隐藏悬浮条" : "显示悬浮条", click: () => { if (overlay.isVisible()) overlay.hide(); else { overlay.showInactive(); keepOnTop(); } refreshTrayMenu(); } },
     { label: "立即刷新", accelerator: "CmdOrCtrl+R", click: () => engine.refreshNow() },
     { type: "separator" },
     { label: "展示样式", submenu: [
@@ -496,6 +515,7 @@ function startForeground() {
   fgWatcher = new ForegroundWatcher(log).start();
   // 切到了这个任务所在的软件 → 清除它的脉冲（只认脉冲出现之后的切换；本来就停在那里不算，等你悬停图标或点开提醒）
   fgWatcher.on("change", (name, apps) => {
+    setTimeout(keepOnTop, 120); // 刚切到的窗口如果是置顶的，会盖住悬浮条
     fgApps = apps;
     const n = appKey(name);
     for (const [ai, p] of Object.entries(pulses)) {
@@ -616,9 +636,9 @@ app.whenReady().then(async () => {
   // 休眠时暂停，唤醒/解锁后等网络恢复再刷新（避免唤醒瞬间的「无法连接」）
   if (!MOCK) {
     powerMonitor.on("suspend", () => { paused = true; engine.pause(); log("休眠，暂停刷新"); });
-    powerMonitor.on("resume", () => { paused = false; engine.resume(); log("唤醒，稍后刷新"); });
+    powerMonitor.on("resume", () => { paused = false; engine.resume(); log("唤醒，稍后刷新"); setTimeout(keepOnTop, 1500); });
     powerMonitor.on("lock-screen", () => { paused = true; engine.pause(); });
-    powerMonitor.on("unlock-screen", () => { paused = false; engine.resume(); });
+    powerMonitor.on("unlock-screen", () => { paused = false; engine.resume(); setTimeout(keepOnTop, 800); });
   }
 
   screen.on("display-removed", fitOverlay);
@@ -626,6 +646,6 @@ app.whenReady().then(async () => {
   screen.on("display-metrics-changed", fitOverlay);
 });
 
-app.on("second-instance", () => { if (overlay) overlay.showInactive(); openSettings(); });
+app.on("second-instance", () => { if (overlay) { overlay.showInactive(); keepOnTop(); } openSettings(); });
 app.on("window-all-closed", (e) => e.preventDefault());
 app.on("will-quit", () => { try { if (fgWatcher) fgWatcher.stop(); if (winActivator) winActivator.stop(); } catch { /* ignore */ } });
