@@ -28,6 +28,7 @@ function defaults() {
     dock: { mode: "edge", edge: "right", y: 0.32, x: 0.8, displayId: 0 },
     zoom: 1, // 整体缩放 0.6 ~ 2.0（竖条、气泡、面板统一缩放）
     taskNotify: true, // AI 任务完成 / 需要处理时，在对应图标旁弹出提醒
+    innerRing: true, // 竖条图标显示内圈（本周 / 总用量）；外圈是当前会话用量
     hotkey: "", // 显示 / 隐藏悬浮条的快捷键（Electron 写法）。"" = 默认，"off" = 不使用
   };
 }

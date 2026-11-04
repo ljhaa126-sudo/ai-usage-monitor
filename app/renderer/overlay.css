@@ -27,7 +27,11 @@ svg { display: block; overflow: visible; }
 .item.on .ring::after { content: ""; position: absolute; inset: -5px; border-radius: 50%; border: 1px solid rgba(255,255,255,.22); }
 .ring { position: relative; width: 48px; height: 48px; transition: transform .15s; }
 .ring svg.r { position: absolute; inset: 0; transform: rotate(-90deg); }
-.ring .r .arc { transition: stroke-dashoffset .6s cubic-bezier(.2,.8,.2,1), stroke .4s; }
+.ring .r .arc, .ring .r .arc2 { transition: stroke-dashoffset .6s cubic-bezier(.2,.8,.2,1), stroke .4s; }
+.ring .r .inner { opacity: 0; transition: opacity .25s; }
+.item.in2 .ring .r .inner { opacity: 1; }
+.item.in2 .ring .g svg { transform: scale(.82); } /* 有内圈时图标略缩小，留出间距 */
+.ring .g svg { transition: transform .25s; }
 .ring .g { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
 .item .pct { font-size: 15px; font-weight: 400; letter-spacing: -.2px; line-height: 18px; }
 .item.idle .g { opacity: .4; }

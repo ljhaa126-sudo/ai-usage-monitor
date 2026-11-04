@@ -138,6 +138,7 @@
       <div class="grp">
         <div class="row"><div class="lab">展示样式<small>极简：悬停图标弹出小气泡；详细：点击图标展开完整面板</small></div>${seg("style", cfg.style, [["minimal", "极简"], ["detail", "详细"]])}</div>
         <div class="row"><div class="lab">位置<small>也可以直接拖动竖条：靠近屏幕边缘松手会吸附，拖到中间就自由悬浮</small></div>${seg("pos", pos, [["right", "贴右侧"], ["left", "贴左侧"], ["float", "自由摆放"]])}</div>
+        <div class="row"><div class="lab">显示内圈（本周 / 总用量）<small>外圈是当前会话（5 小时）用量，内圈是本周 / 总用量；只有同时有这两种额度的 AI（如 Claude、Codex）才显示内圈</small></div>${sw(cfg.innerRing !== false, 'data-b="innerRing"')}</div>
         <div class="row"><div class="lab">隐藏未连接的 AI<small>竖条上只显示已登录、有数据的 AI</small></div>${sw(cfg.hideIdle, 'data-b="hideIdle"')}</div>
         <div class="row"><div class="lab">任务完成提醒<small>Codex / Claude Code / WorkBuddy / CodeBuddy / BoxAI 的任务，以及 Claude、ChatGPT 的普通聊天（需登录网页版），完成或需要你处理时在对应图标旁弹出提醒（10 秒后自动关闭）；图标上的脉冲会一直保留，直到你把鼠标移到图标上、点开提醒，或切到这个任务所在的窗口</small></div>${sw(cfg.taskNotify !== false, 'data-b="taskNotify"')}</div>
         <div class="row"><div class="lab">显示 / 隐藏悬浮条的快捷键<small>${hkRec ? (recErr ? `<span style="color:#FF9F0A">${esc(recErr)}</span>` : "请按下新的组合键（至少两个修饰键 + 一个字母 / 数字 / F 键），按 Esc 取消") : hk.error ? `<span style="color:#FF9F0A">${esc(hk.error)}</span>` : cfg.hotkey === "off" ? "已关闭" : "在任何软件里按下都能切换悬浮条；也可以点托盘菜单"}</small></div>

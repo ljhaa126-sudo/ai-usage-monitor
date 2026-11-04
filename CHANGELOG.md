@@ -1,5 +1,11 @@
 # 更新日志
 
+## 1.7.3
+
+- **竖条图标新增内圈**：外圈是当前会话（5 小时）用量，内圈是本周 / 总用量，颜色同样按用量从绿到红。
+  只有同时有这两种额度的 AI（如 Claude、Codex）才显示内圈。设置 → 外观 →「显示内圈（本周 / 总用量）」可以开关。
+- **Inner ring** on bar icons for weekly / total usage (outer ring = current session); toggle in Settings.
+
 ## 1.7.2
 
 - **修复：重新打开 Claude / Codex 后，已经完成的旧任务陆续弹窗**。

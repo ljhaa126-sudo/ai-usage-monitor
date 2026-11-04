@@ -49,11 +49,15 @@
   const byId = (id) => list.find((s) => s.id === id);
 
   // ---------------- 竖条 ----------------
+  // 竖条图标的圆环：外圈 = 当前会话（5 小时）用量；内圈 = 本周 / 总用量（设置里可以关掉）
+  const IN_R = 17, IN_W = 2.6, IN_C = 2 * Math.PI * IN_R;
   function ringSVG(size, stroke, pct, col, track) {
     const r = (size - stroke) / 2, c = 2 * Math.PI * r, v = Math.max(0, Math.min(100, pct || 0));
     return `<svg class="r" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
       <circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${track}" stroke-width="${stroke}"/>
       <circle class="arc" cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${col}" stroke-width="${stroke}" stroke-linecap="round" stroke-dasharray="${c}" stroke-dashoffset="${v > 0 ? c * (1 - v / 100) : c}"/>
+      <g class="inner"><circle cx="${size / 2}" cy="${size / 2}" r="${IN_R}" fill="none" stroke="#1d1d1f" stroke-width="${IN_W}"/>
+      <circle class="arc2" cx="${size / 2}" cy="${size / 2}" r="${IN_R}" fill="none" stroke="#30D158" stroke-width="${IN_W}" stroke-linecap="round" stroke-dasharray="${IN_C}" stroke-dashoffset="${IN_C}"/></g>
     </svg>`;
   }
 
@@ -77,6 +81,15 @@
       const c = 2 * Math.PI * 22;
       arc.setAttribute("stroke", loading ? "rgba(255,255,255,.35)" : color(v));
       arc.setAttribute("stroke-dashoffset", loading ? c * 0.78 : v > 0 ? c * (1 - Math.min(100, v) / 100) : c);
+      // 内圈：同时有「当前会话」和「本周 / 总额度」两种额度时显示后者
+      const second = ok && s.primary && s.secondary ? s.secondary : null;
+      const showIn = !!second && cfg && cfg.innerRing !== false && !loading;
+      el.classList.toggle("in2", showIn);
+      if (showIn) {
+        const v2 = Math.max(0, Math.min(100, second.usedPercent || 0));
+        const a2 = el.querySelector(".arc2");
+        if (a2) { a2.setAttribute("stroke", color(v2)); a2.setAttribute("stroke-dashoffset", v2 > 0 ? IN_C * (1 - v2 / 100) : IN_C); }
+      }
       el.classList.toggle("idle", !ok && !loading);
       el.classList.toggle("loading", loading);
       el.classList.toggle("on", s.id === cardId || s.id === pinned);
