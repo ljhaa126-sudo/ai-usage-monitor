@@ -1,0 +1,32 @@
+"use strict";
+const { contextBridge, ipcRenderer } = require("electron");
+
+contextBridge.exposeInMainWorld("aimon", {
+  state: () => ipcRenderer.invoke("state"),
+  onUpdate: (fn) => ipcRenderer.on("update", (_e, list) => fn(list)),
+  onTask: (fn) => ipcRenderer.on("task", (_e, ev) => fn(ev)),
+  openTask: (ev) => ipcRenderer.invoke("open-task", ev),
+  onPulses: (fn) => ipcRenderer.on("pulses", (_e, p) => fn(p)),
+  getPulses: () => ipcRenderer.invoke("pulses"),
+  clearPulse: (ai, why) => ipcRenderer.invoke("clear-pulse", ai, why),
+  onConfig: (fn) => ipcRenderer.on("config", (_e, cfg) => fn(cfg)),
+  onWebStatus: (fn) => ipcRenderer.on("web-status", (_e, s) => fn(s)),
+  setIgnore: (b) => ipcRenderer.send("ignore", b),
+  refresh: (id) => ipcRenderer.invoke("refresh", id),
+  consumeReset: (id, creditId) => ipcRenderer.invoke("consume-reset", { id, creditId }),
+  customPresets: () => ipcRenderer.invoke("custom-presets"),
+  customTest: (c) => ipcRenderer.invoke("custom-test", c),
+  customAdd: (c) => ipcRenderer.invoke("custom-add", c),
+  customUpdate: (c) => ipcRenderer.invoke("custom-update", c),
+  customRemove: (id) => ipcRenderer.invoke("custom-remove", id),
+  openUrl: (u) => ipcRenderer.invoke("open-url", u),
+  openSettings: () => ipcRenderer.invoke("open-settings"),
+  saveConfig: (patch) => ipcRenderer.invoke("save-config", patch),
+  login: (id, idp) => ipcRenderer.invoke("login", id, idp),
+  logout: (id) => ipcRenderer.invoke("logout", id),
+  webStatus: () => ipcRenderer.invoke("web-status"),
+  dragEnd: (p) => ipcRenderer.invoke("drag-end", p),
+  contextMenu: () => ipcRenderer.invoke("context-menu"),
+  openLog: () => ipcRenderer.invoke("open-log"),
+  quit: () => ipcRenderer.invoke("quit"),
+});

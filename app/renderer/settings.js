@@ -1,0 +1,201 @@
+"use strict";
+(() => {
+  const { glyph, esc } = window.UI;
+  const api = window.aimon;
+  const root = document.getElementById("root");
+  let cfg = null, list = [], web = {}, version = "";
+  let presets = null;
+  let editing = null;   // 正在编辑的自定义工具（表单草稿）{ id?, ...fields }
+  let testRes = null;   // { ok, message, sample }
+  let testing = false;
+  let confirmDel = null;
+
+  const HINT = {
+    claude: "装了 Claude Code 会自动识别（首次会弹出钥匙串授权，选「始终允许」）。只用 Claude 网页版或桌面 App 的，点「登录网页版」登录一次即可。登录网页版后，网页版 / 桌面版 / 手机上的普通聊天回复完也会提醒。",
+    codex: "自动读取 Codex CLI / 桌面版的登录（~/.codex/auth.json）；对话时直接读取本地会话日志，秒级更新。在线接口如果被 Cloudflare 拦截（报 403 网页），点「登录网页版」登录 chatgpt.com 并通过一次验证即可。登录后 ChatGPT 普通聊天回复完也会提醒。",
+    cursor: "自动读取 Cursor 编辑器的登录（可能弹出钥匙串授权）；读不到时点「登录网页版」。",
+    gemini: "自动读取 Gemini CLI 的 Google 登录（~/.gemini/oauth_creds.json）。",
+    copilot: "自动读取 Copilot 插件登录；读不到时在终端运行 gh auth token，把结果粘贴到这里。",
+    kimi: "在 kimi.com/code 控制台创建 API Key 后填入。",
+    glm: "填写 GLM Coding Plan 的 API Key；z.ai 国际版请选「国际」。",
+    boxai: "自动读取本机 Box 登录的 RTX 账号，查询本月个人 Token 额度（需连接公司内网 / iOA）。",
+    tokendash: "读取腾讯官方「用量健康助手」(Tencent Token Dashboard) 的本地登录态，显示全公司 AI Token 的本月用量（人民币）。需先安装并登录过那个助手；它的登录每隔约两小时自动续，半个月后需重新登录一次。",
+    workbuddy: "腾讯员工是企业 SSO 账号，需在企业专属站点走 iOA 登录（手机号 / 微信登录的是另一个账号，查不到企业额度）。若登录窗口空白，说明 iOA 拦截了本程序访问内网，需要在 iOA 里给「AI Usage Monitor.exe」授信。",
+  };
+  const ST = { ok: ["已连接", "ok"], stale: ["数据过期", "warn"], error: ["出错", "err"], nologin: ["未连接", "warn"], loading: ["读取中…", ""], disabled: ["已关闭", ""] };
+
+  const sw = (on, attrs) => `<button class="sw ${on ? "on" : ""}" ${attrs}></button>`;
+  const seg = (key, val, opts) => `<div class="seg" data-seg="${key}">${opts.map(([v, l]) => `<button data-v="${v}" class="${String(val) === String(v) ? "on" : ""}">${l}</button>`).join("")}</div>`;
+  const pcOf = (id) => (cfg.providers && cfg.providers[id]) || { enabled: true, apiKey: "" };
+  const customOf = (id) => (cfg.customs || []).find((c) => c.id === id);
+
+  // ---------------- 自定义工具编辑表单 ----------------
+  function field(k, label, ph, opts = {}) {
+    const v = esc(editing[k] || "");
+    const tag = opts.area ? `<textarea data-f="${k}" rows="${opts.rows || 2}" placeholder="${esc(ph)}" spellcheck="false">${v}</textarea>` : `<input data-f="${k}" placeholder="${esc(ph)}" value="${v}" spellcheck="false" />`;
+    return `<label class="fl"><span>${label}</span>${tag}</label>`;
+  }
+
+  function editorHTML() {
+    if (!editing) return "";
+    const pre = presets ? Object.entries(presets).map(([k, p]) => `<button class="chip" data-preset="${k}">${k === "blank" ? "空白" : esc(p.name)}</button>`).join("") : "";
+    const tr = testRes ? `<div class="test ${testRes.ok ? "ok" : "err"}">${esc(testRes.message)}</div>${testRes.sample ? `<pre class="sample">${esc(testRes.sample)}</pre>` : ""}` : "";
+    return `<div class="editor">
+      <div class="eh">${editing.id ? "编辑自定义工具" : "添加自定义工具"}</div>
+      ${editing.id ? "" : `<div class="chips"><span>从模板开始：</span>${pre}</div>`}
+      ${field("name", "名称", "例如：公司中转站")}
+      <div class="two">${field("url", "用量接口地址", "https://…（返回 JSON）")}<label class="fl sm"><span>方法</span><select data-f="method"><option ${editing.method !== "POST" ? "selected" : ""}>GET</option><option ${editing.method === "POST" ? "selected" : ""}>POST</option></select></label></div>
+      ${field("headers", "请求头（每行一个，可用 {{env:变量名}} 引用环境变量）", "Authorization: Bearer xxx", { area: true, rows: 2 })}
+      ${editing.method === "POST" ? field("body", "请求体（JSON）", "{}", { area: true, rows: 2 }) : ""}
+      <div class="eh2">字段路径（按 JSON 路径填写，如 data.quota 或 list.0.used；以下任选其一组合即可）</div>
+      <div class="two">${field("percentPath", "已用百分比", "如 data.used_percent")}${field("usedPath", "已用量", "如 data.used")}</div>
+      <div class="two">${field("limitPath", "总额度", "如 data.limit")}${field("remainPath", "剩余量 / 余额", "如 data.remaining")}</div>
+      <div class="two">${field("resetPath", "重置时间（可选）", "如 data.reset_at")}${field("label", "显示名称", "如 本月额度")}</div>
+      <div class="two">${field("unit", "单位（可选）", "如 元 / tokens / 次")}${field("dashboard", "用量页网址（可选）", "https://…")}</div>
+      <div class="acts"><button class="btn gray" data-act="c-test" ${testing ? "disabled" : ""}>${testing ? "测试中…" : "测试"}</button><span style="flex:1"></span><button class="btn gray" data-act="c-cancel">取消</button><button class="btn" data-act="c-save">${editing.id ? "保存" : "添加"}</button></div>
+      ${tr}
+    </div>`;
+  }
+
+  function render() {
+    if (!cfg) return;
+    window.UI.setLetters(list);
+    const ae = document.activeElement;
+    const focus = ae && ae.dataset ? (ae.dataset.key ? `[data-key="${ae.dataset.key}"]` : ae.dataset.f ? `[data-f="${ae.dataset.f}"]` : null) : null;
+    const caret = focus && ae.selectionStart != null ? [ae.selectionStart, ae.selectionEnd] : null;
+    const scroll = window.scrollY;
+    const byId = Object.fromEntries(list.map((s) => [s.id, s]));
+    const pos = cfg.dock.mode === "float" ? "float" : cfg.dock.edge;
+    const provs = cfg.order.map((id, i) => {
+      const s = byId[id]; if (!s) return "";
+      const pc = pcOf(id);
+      const [stT, stC] = pc.enabled ? ST[s.state] || ["", ""] : ST.disabled;
+      const detail = [stT, s.plan, s.account].filter(Boolean).join(" · ");
+      let x = "";
+      if (pc.enabled || s.custom) {
+        const loginBtns = id === "workbuddy"
+          ? `<button class="btn" data-login="${id}">企业登录（iOA）</button>`
+          : `<button class="btn" data-login="${id}">登录网页版</button>`;
+        const webRow = pc.enabled && s.login ? `<div class="web">${web[id] ? `<span>✓ 已登录网页版</span><button class="btn red" data-logout="${id}">退出登录</button>` : loginBtns}</div>` : "";
+        const key = pc.enabled && s.keyKind ? `<div class="k"><input type="password" data-key="${id}" placeholder="${esc(s.keyKind)}" value="${esc(pc.apiKey || "")}" spellcheck="false" />${id === "glm" ? `<select data-region="glm"><option value="cn" ${pc.region !== "global" ? "selected" : ""}>国内</option><option value="global" ${pc.region === "global" ? "selected" : ""}>国际</option></select>` : ""}</div>` : "";
+        const msg = pc.enabled && s.state !== "ok" && s.message ? `<div class="hint" style="margin:0;color:${s.state === "error" ? "#ff8a80" : "rgba(235,235,245,.5)"}">${esc(s.message)}</div>` : "";
+        const hint = s.custom ? (() => { const c = customOf(id); return c ? `<div class="hint" style="margin:0">${esc(c.method)} ${esc(c.url)}</div>` : ""; })() : `<div class="hint" style="margin:0">${esc(HINT[id] || "")}</div>`;
+        const cust = s.custom ? `<div class="web">${confirmDel === id ? `<span style="color:#FF9F0A">确定删除？</span><button class="btn red" data-cdel="${id}">删除</button><button class="btn gray" data-act="c-undel">取消</button>` : `<button class="btn gray" data-cedit="${id}">编辑</button><button class="btn red" data-cdelask="${id}">删除</button>`}</div>` : "";
+        x = `<div class="x">${webRow}${key}${hint}${msg}${cust}</div>`;
+        if (editing && editing.id === id) x += editorHTML();
+      }
+      return `<div class="prov"><div class="row"><div class="ic">${glyph(id, 18)}</div><div class="lab">${esc(s.name)}${s.custom ? ' <span class="tag">自定义</span>' : ""}<div class="st ${stC}">${esc(detail)}</div></div>
+        <div class="ord"><button data-up="${i}">▲</button><button data-down="${i}">▼</button></div>${sw(pc.enabled, `data-en="${id}"`)}</div>${x}</div>`;
+    }).join("");
+
+    const addRow = editing && !editing.id ? `<div class="prov">${editorHTML()}</div>` : `<div class="prov"><div class="row add" data-act="c-new"><div class="ic">${glyph("plus", 16)}</div><div class="lab">添加自定义 AI 工具<small>任何能返回 JSON 用量的接口都能接入：中转站、DeepSeek 余额、公司内部平台…</small></div></div></div>`;
+
+    root.innerHTML = `
+      <div class="hdr">外观</div>
+      <div class="grp">
+        <div class="row"><div class="lab">展示样式<small>极简：悬停图标弹出小气泡；详细：点击图标展开完整面板</small></div>${seg("style", cfg.style, [["minimal", "极简"], ["detail", "详细"]])}</div>
+        <div class="row"><div class="lab">位置<small>也可以直接拖动竖条：靠近屏幕边缘松手会吸附，拖到中间就自由悬浮</small></div>${seg("pos", pos, [["right", "贴右侧"], ["left", "贴左侧"], ["float", "自由摆放"]])}</div>
+        <div class="row"><div class="lab">隐藏未连接的 AI<small>竖条上只显示已登录、有数据的 AI</small></div>${sw(cfg.hideIdle, 'data-b="hideIdle"')}</div>
+        <div class="row"><div class="lab">任务完成提醒<small>Codex / Claude Code / WorkBuddy / CodeBuddy / BoxAI 的任务，以及 Claude、ChatGPT 的普通聊天（需登录网页版），完成或需要你处理时在对应图标旁弹出提醒（10 秒后自动关闭）；图标上的脉冲会一直保留，直到你把鼠标移到图标上、点开提醒，或切到这个任务所在的窗口</small></div>${sw(cfg.taskNotify !== false, 'data-b="taskNotify"')}</div>
+        <div class="row"><div class="lab">菜单栏显示最高用量</div>${sw(cfg.trayPercent, 'data-b="trayPercent"')}</div>
+      </div>
+      <div class="hdr">刷新</div>
+      <div class="grp">
+        <div class="row"><div class="lab">刷新频率<small>正在使用时多久查一次</small></div>${seg("refreshSeconds", cfg.refreshSeconds, [[5, "5 秒"], [10, "10 秒"], [30, "30 秒"], [60, "1 分钟"], [300, "5 分钟"]])}</div>
+        <div class="row"><div class="lab">智能频率（推荐）<small>最近 5 分钟有在用、或用量在变化时按上面的频率；闲置时自动放慢到 2 分钟</small></div>${sw(cfg.smartRefresh !== false, 'data-b="smartRefresh"')}</div>
+      </div>
+      <div class="hint">更新是「事件驱动」的：Claude Code、Codex、Gemini CLI 一有新对话，Claude 桌面版一有新消息，都会在几秒内自动刷新，不需要把频率调得很高。偶尔一次网络失败不会报错，会继续显示上次的数据并自动重试；Mac 休眠时暂停，唤醒后自动恢复。</div>
+      <div class="hdr">通用</div>
+      <div class="grp">
+        <div class="row"><div class="lab">登录时自动启动</div>${sw(cfg.autoStart, 'data-b="autoStart"')}</div>
+        <div class="row"><div class="lab" style="flex:none">网络代理</div><input data-proxy="1" placeholder="留空 = 跟随系统代理；例：127.0.0.1:7890；填 direct 不走代理" value="${esc(cfg.proxy || "")}" spellcheck="false" /></div>
+      </div>
+      <div class="hdr">AI 账号与顺序</div>
+      <div class="grp">${provs}${addRow}</div>
+      <div class="foot"><span>版本 ${esc(version)} · <span class="link" data-act="log">查看日志</span></span><button class="btn red" data-act="quit">退出程序</button></div>`;
+    if (focus) {
+      const el = root.querySelector(focus);
+      if (el) { el.focus(); try { if (caret) el.setSelectionRange(caret[0], caret[1]); else el.setSelectionRange(el.value.length, el.value.length); } catch { /* select */ } }
+    }
+    window.scrollTo(0, scroll);
+  }
+
+  const save = (patch) => api.saveConfig(patch);
+  let keyT = {};
+
+  async function loadPresets() {
+    if (presets) return;
+    try { const r = await api.customPresets(); presets = r.presets; } catch { presets = {}; }
+  }
+
+  root.addEventListener("click", async (e) => {
+    const t = e.target.closest("button, [data-act], [data-seg] button") || e.target;
+    const segEl = t.closest("[data-seg]");
+    if (segEl && t.dataset.v != null) {
+      const k = segEl.dataset.seg, v = t.dataset.v;
+      if (k === "pos") save({ dock: v === "float" ? { ...cfg.dock, mode: "float" } : { ...cfg.dock, mode: "edge", edge: v } });
+      else if (k === "refreshSeconds") save({ refreshSeconds: Number(v) });
+      else save({ [k]: v });
+      return;
+    }
+    if (t.dataset.b === "smartRefresh") return save({ smartRefresh: cfg.smartRefresh === false });
+    if (t.dataset.b) return save({ [t.dataset.b]: !cfg[t.dataset.b] });
+    if (t.dataset.en) { const id = t.dataset.en; return save({ providers: { [id]: { enabled: !pcOf(id).enabled } } }); }
+    if (t.dataset.login) return api.login(t.dataset.login, t.dataset.idp || "");
+    if (t.dataset.logout) return api.logout(t.dataset.logout).then(refreshWeb);
+    if (t.dataset.up != null || t.dataset.down != null) {
+      const i = Number(t.dataset.up ?? t.dataset.down), j = t.dataset.up != null ? i - 1 : i + 1;
+      if (j < 0 || j >= cfg.order.length) return;
+      const order = [...cfg.order];
+      [order[i], order[j]] = [order[j], order[i]];
+      return save({ order });
+    }
+    // ---- 自定义工具 ----
+    if (t.dataset.preset) { editing = { ...presets[t.dataset.preset] }; testRes = null; return render(); }
+    if (t.dataset.cedit) { await loadPresets(); editing = { ...customOf(t.dataset.cedit) }; testRes = null; confirmDel = null; return render(); }
+    if (t.dataset.cdelask) { confirmDel = t.dataset.cdelask; return render(); }
+    if (t.dataset.cdel) { const id = t.dataset.cdel; confirmDel = null; if (editing && editing.id === id) editing = null; await api.customRemove(id); return; }
+    switch (t.dataset.act) {
+      case "quit": return api.quit();
+      case "log": return api.openLog();
+      case "c-undel": confirmDel = null; return render();
+      case "c-new": await loadPresets(); editing = { ...(presets.blank || {}) }; testRes = null; return render();
+      case "c-cancel": editing = null; testRes = null; return render();
+      case "c-test": {
+        testing = true; testRes = null; render();
+        try { testRes = await api.customTest(editing); } catch (err) { testRes = { ok: false, message: String(err && err.message || err) }; }
+        testing = false; return render();
+      }
+      case "c-save": {
+        if (!String(editing.url || "").trim()) { testRes = { ok: false, message: "请填写用量接口地址" }; return render(); }
+        const r = editing.id ? await api.customUpdate(editing) : await api.customAdd(editing);
+        if (r && r.ok) { editing = null; testRes = null; } else testRes = { ok: false, message: (r && r.message) || "保存失败" };
+        return render();
+      }
+    }
+  });
+  root.addEventListener("input", (e) => {
+    const t = e.target;
+    if (t.dataset.f && editing) { editing[t.dataset.f] = t.value; return; }
+    if (t.dataset.key) {
+      const id = t.dataset.key, v = t.value.trim();
+      clearTimeout(keyT[id]);
+      keyT[id] = setTimeout(() => save({ providers: { [id]: { apiKey: v } } }), 700);
+    }
+    if (t.dataset.proxy) { clearTimeout(keyT._p); keyT._p = setTimeout(() => save({ proxy: t.value.trim() }), 900); }
+  });
+  root.addEventListener("change", (e) => {
+    const t = e.target;
+    if (t.dataset.f && editing) { editing[t.dataset.f] = t.value; if (t.dataset.f === "method") render(); return; }
+    if (t.dataset.region) save({ providers: { glm: { region: t.value } } });
+  });
+
+  // 正在输入时不重绘，避免光标跳动
+  const typing = () => { const a = document.activeElement; return a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.tagName === "SELECT"); };
+  const refreshWeb = () => api.webStatus().then((w) => { web = w; render(); });
+  api.onUpdate((l) => { list = l; if (!typing()) render(); });
+  api.onConfig((c) => { cfg = c; if (!typing()) render(); });
+  api.onWebStatus((w) => { web = w; render(); });
+  api.state().then((s) => { cfg = s.cfg; list = s.list; version = s.version; refreshWeb(); });
+  window.__settingsTest = { newCustom: async (p) => { await loadPresets(); editing = { ...(presets[p] || presets.blank) }; render(); } };
+})();
