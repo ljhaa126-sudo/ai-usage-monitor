@@ -59,6 +59,14 @@ const put = (p, t) => { fs.mkdirSync(path.dirname(path.join(H, p)), { recursive:
   assert.strictEqual(det.autoCfg("glm").region, "global");
   ok("找到 Key 的 AI 也会自动接入");
 
+  // ---- 腾讯内部：Box 客户端（RTX 账号）、用量健康助手（token.woa.com）----
+  put(".config/Box/s3_user.json", JSON.stringify({ rtx: "someone" }));
+  put(".config/com.tencent.token-dashboard/auth-session.sqlite", "x");
+  found = await det.scan();
+  assert.strictEqual(found.boxai, "Box 客户端");
+  assert.strictEqual(found.tokendash, "用量健康助手（token.woa.com）");
+  ok("识别腾讯 BoxAI（Box 客户端）和 token.woa.com（用量健康助手）");
+
   // ---- Claude 桌面版的登录（Chromium Cookies 数据库）----
   const { DatabaseSync } = require("node:sqlite");
   const pw = "testpassword";

@@ -3,7 +3,21 @@
 const path = require("path");
 const os = require("os");
 const fs = require("fs");
-const { requestJSON } = require("./http");
+const { requestJSON: rawRequestJSON } = require("./http");
+// 公司内网接口（*.woa.com）连不上时，给一句看得懂的提示
+const INTRANET_DOWN = /ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ETIMEDOUT|ERR_NAME_NOT_RESOLVED|ERR_CONNECTION|ERR_TUNNEL|超时|无法连接/i;
+async function requestJSON(opts) {
+  try { return await rawRequestJSON(opts); } catch (e) {
+    let host = "";
+    try { host = new URL(opts.url).hostname; } catch { /* ignore */ }
+    if (/\.woa\.com$/i.test(host) && !e.status && INTRANET_DOWN.test(String(e.message))) {
+      const ne = new Error(`连不上 ${host}：需要连接公司内网或打开 iOA（不在公司网络时会自动重试）`);
+      ne.offline = true;
+      throw ne;
+    }
+    throw e;
+  }
+}
 const { num, readJSON, NoLogin, appSupport, fileExists } = require("./util");
 
 const EXTRA_DEFS = [

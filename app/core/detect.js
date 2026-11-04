@@ -40,7 +40,9 @@ const CATALOG = {
   gemini: () => [[() => exists(path.join(home(), ".gemini", "oauth_creds.json")), "Gemini CLI 登录"]],
   copilot: () => [[() => exists(path.join(home(), ".config", "github-copilot")) || exists(localAppData("github-copilot")), "Copilot 插件"]],
   workbuddy: () => [[() => exists(path.join(home(), ".workbuddy")) || macApp("WorkBuddy"), "WorkBuddy"]],
-  boxai: () => [[() => exists(path.join(home(), ".box")), "Box 客户端"]],
+  // 腾讯内部：BoxAI 读 Box 客户端里的 RTX 账号；AI Token 用量（token.woa.com）读「用量健康助手」的登录
+  boxai: () => [[() => exists(appSupport("Box", "s3_user.json")) || exists(path.join(home(), ".box")) || macApp("Box") || macApp("Box AI Studio"), "Box 客户端"]],
+  tokendash: () => [[() => ["com.tencent.token-dashboard"].some((d) => exists(appSupport(d, "auth-session.sqlite")) || exists(path.join(home(), ".local", "share", d, "auth-session.sqlite"))), "用量健康助手（token.woa.com）"]],
 };
 
 // ---------------- ③ 在本机配置里找 API Key ----------------

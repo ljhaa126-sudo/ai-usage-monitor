@@ -1,5 +1,17 @@
 # 更新日志
 
+## 1.7.0
+
+- **设置界面配合自动识别重新整理**（AI 账号部分）：
+  - 已接入的 AI 显示「已自动接入」和数据来源（例如「来源：Claude Code 登录」）。
+  - 检测到但读不到登录的 AI 显示「检测到…，还读不到登录」，旁边直接给「登录」按钮（只需一次）。
+  - 本机没有检测到的 AI 收进底部「本机没有检测到的 AI」一行，需要时再展开。
+  - 网页登录按钮、Key 输入框收进每个 AI 的「手动设置」，只在自动识别不到时才用；不再出现「API Key（必填）」。
+- **腾讯内部 AI 也自动识别**：BoxAI（读取 Box 客户端里的 RTX 账号）、AI Token 用量 / token.woa.com（读取「用量健康助手」的登录）。
+  不在公司网络时提示「需要连接公司内网或打开 iOA」，连上后自动恢复。
+- **Settings reorganized for auto-detection**: connected / detected-needs-login / not-detected groups; manual options are tucked away.
+- Tencent-internal BoxAI and token.woa.com are detected automatically as well.
+
 ## 1.6.9
 
 - **任务彻底完成才提醒**（修复 Codex 会话进行中不停弹窗）：

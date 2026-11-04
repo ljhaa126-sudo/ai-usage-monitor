@@ -435,6 +435,7 @@ function ipc() {
   ipcMain.handle("open-settings", () => openSettings());
   ipcMain.handle("save-config", (_e, patch) => updateCfg(patch));
   ipcMain.handle("hotkey", () => hotkey);
+  ipcMain.handle("detected", () => (detector ? detector.found : {}));
   // 设置里录制新快捷键时先暂停全局快捷键，否则按下当前组合会被它截走
   ipcMain.handle("hotkey-pause", (_e, on) => { if (on) { hotkeyPaused = true; try { globalShortcut.unregisterAll(); } catch { /* ignore */ } } else registerHotkey(); });
   ipcMain.handle("login", (_e, id, idp) => openLogin(id, idp));
@@ -577,7 +578,10 @@ function startDetector() {
   if (!Array.isArray(store.cfg.connected)) { store.cfg.connected = Object.keys(store.loadSnapshot() || {}); store.saveCfg(); }
   const { Detector } = require("./core/detect");
   detector = new Detector({ log, webSession });
-  detector.on("changed", (ids) => { for (const id of ids) engine.refreshNow(id); });
+  detector.on("changed", (ids) => {
+    for (const id of ids) engine.refreshNow(id);
+    if (settingsWin && !settingsWin.isDestroyed()) settingsWin.webContents.send("detected", detector.found);
+  });
   detector.on("claude-session", () => engine.refreshNow("claude"));
   detector.start();
   setTimeout(promptLogins, 40000);

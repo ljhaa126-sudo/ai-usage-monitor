@@ -4,6 +4,9 @@
   const api = window.aimon;
   const root = document.getElementById("root");
   let cfg = null, list = [], web = {}, version = "";
+  let found = {};            // 自动识别：id -> 在本机发现的说明
+  const manual = {};         // 哪些 AI 展开了「手动设置」
+  let showMissing = false;   // 展开「本机没有检测到的 AI」
   let presets = null;
   let editing = null;   // 正在编辑的自定义工具（表单草稿）{ id?, ...fields }
   let testRes = null;   // { ok, message, sample }
@@ -77,27 +80,54 @@
     const scroll = window.scrollY;
     const byId = Object.fromEntries(list.map((s) => [s.id, s]));
     const pos = cfg.dock.mode === "float" ? "float" : cfg.dock.edge;
+    const missing = [];
     const provs = cfg.order.map((id, i) => {
       const s = byId[id]; if (!s) return "";
       const pc = pcOf(id);
-      const [stT, stC] = pc.enabled ? ST[s.state] || ["", ""] : ST.disabled;
+      const live = s.state === "ok" || s.state === "stale" || s.state === "error" || (s.state === "loading" && s.updatedAt);
+      const detected = live || !!found[id] || s.custom || web[id] || !!String(pc.apiKey || "").trim();
+      if (!detected) { missing.push([id, i, s, pc]); return ""; }
+      // 状态行：已自动接入 / 检测到但读不到登录 / 出错
+      let stT, stC;
+      if (!pc.enabled) [stT, stC] = ST.disabled;
+      else if (s.state === "ok" || s.state === "stale") { stT = /^手动/.test(s.source || "") ? "已连接" : "已自动接入"; stC = s.state === "ok" ? "ok" : "warn"; }
+      else if (s.state === "nologin") { stT = `检测到${found[id] ? "（" + found[id] + "）" : ""}，还读不到登录`; stC = "warn"; }
+      else [stT, stC] = ST[s.state] || ["", ""];
       const detail = [stT, s.plan, s.account].filter(Boolean).join(" · ");
+      const srcLine = pc.enabled && (s.state === "ok" || s.state === "stale") && s.source ? `<div class="hint" style="margin:0">来源：${esc(s.source)}</div>` : "";
+      // 检测到了但读不到登录：直接给「登录」按钮（只需一次）
+      const needLogin = pc.enabled && s.state === "nologin" && s.login && !web[id];
+      const quick = needLogin ? `<div class="web"><button class="btn" data-login="${id}">${id === "workbuddy" ? "企业登录（iOA）" : "登录"}</button><span>登录一次，之后自动显示用量</span></div>` : "";
       let x = "";
       if (pc.enabled || s.custom) {
         const loginBtns = id === "workbuddy"
           ? `<button class="btn" data-login="${id}">企业登录（iOA）</button>`
           : `<button class="btn" data-login="${id}">登录网页版</button>`;
         const webRow = pc.enabled && s.login ? `<div class="web">${web[id] ? `<span>✓ 已登录网页版</span><button class="btn red" data-logout="${id}">退出登录</button>` : loginBtns}</div>` : "";
-        const key = pc.enabled && s.keyKind ? `<div class="k"><input type="password" data-key="${id}" placeholder="${esc(s.keyKind)}" value="${esc(pc.apiKey || "")}" spellcheck="false" />${id === "glm" ? `<select data-region="glm"><option value="cn" ${pc.region !== "global" ? "selected" : ""}>国内</option><option value="global" ${pc.region === "global" ? "selected" : ""}>国际</option></select>` : ""}</div>` : "";
+        const key = pc.enabled && s.keyKind ? `<div class="k"><input type="password" data-key="${id}" placeholder="${esc(String(s.keyKind).replace(/（必填）|\(必填\)/, "（自动识别不到时再填）"))}" value="${esc(pc.apiKey || "")}" spellcheck="false" />${id === "glm" ? `<select data-region="glm"><option value="cn" ${pc.region !== "global" ? "selected" : ""}>国内</option><option value="global" ${pc.region === "global" ? "selected" : ""}>国际</option></select>` : ""}</div>` : "";
         const msg = pc.enabled && s.state !== "ok" && s.message ? `<div class="hint" style="margin:0;color:${s.state === "error" ? "#ff8a80" : "rgba(235,235,245,.5)"}">${esc(s.message)}</div>` : "";
         const hint = s.custom ? (() => { const c = customOf(id); return c ? `<div class="hint" style="margin:0">${esc(c.method)} ${esc(c.url)}</div>` : ""; })() : `<div class="hint" style="margin:0">${esc(HINT[id] || "")}</div>`;
         const cust = s.custom ? `<div class="web">${confirmDel === id ? `<span style="color:#FF9F0A">确定删除？</span><button class="btn red" data-cdel="${id}">删除</button><button class="btn gray" data-act="c-undel">取消</button>` : `<button class="btn gray" data-cedit="${id}">编辑</button><button class="btn red" data-cdelask="${id}">删除</button>`}</div>` : "";
-        x = `<div class="x">${webRow}${key}${hint}${msg}${cust}</div>`;
+        // 手动设置（网页登录 / Key / 说明）默认收起：只在自动识别不到时才需要
+        const open = manual[id] || s.custom || (editing && editing.id === id);
+        const body = open ? `${webRow}${key}${hint}${s.state === "nologin" ? "" : msg}${cust}` : "";
+        const toggle = s.custom ? "" : `<div class="web"><span class="link" data-manual="${id}">${open ? "收起手动设置 ▴" : "手动设置 ▾"}</span></div>`;
+        x = `<div class="x">${srcLine}${quick}${s.state === "error" ? msg : ""}${toggle}${body}</div>`;
         if (editing && editing.id === id) x += editorHTML();
       }
       return `<div class="prov"><div class="row"><div class="ic">${glyph(id, 18)}</div><div class="lab">${esc(s.name)}${s.custom ? ' <span class="tag">自定义</span>' : ""}<div class="st ${stC}">${esc(detail)}</div></div>
         <div class="ord"><button data-up="${i}">▲</button><button data-down="${i}">▼</button></div>${sw(pc.enabled, `data-en="${id}"`)}</div>${x}</div>`;
     }).join("");
+    // 本机没有检测到的 AI：收在一行里，展开后可以手动设置
+    const missingRows = missing.map(([id, i, s, pc]) => {
+      const open = manual[id];
+      const webRow = s.login ? `<div class="web">${web[id] ? `<span>✓ 已登录网页版</span><button class="btn red" data-logout="${id}">退出登录</button>` : `<button class="btn gray" data-login="${id}">${id === "workbuddy" ? "企业登录（iOA）" : "登录网页版"}</button>`}</div>` : "";
+      const key = s.keyKind ? `<div class="k"><input type="password" data-key="${id}" placeholder="${esc(String(s.keyKind).replace(/（必填）|\(必填\)/, ""))}" value="${esc(pc.apiKey || "")}" spellcheck="false" />${id === "glm" ? `<select data-region="glm"><option value="cn" ${pc.region !== "global" ? "selected" : ""}>国内</option><option value="global" ${pc.region === "global" ? "selected" : ""}>国际</option></select>` : ""}</div>` : "";
+      const body = open ? `${webRow}${key}<div class="hint" style="margin:0">${esc(HINT[id] || "")}</div>` : "";
+      return `<div class="prov"><div class="row"><div class="ic" style="opacity:.45">${glyph(id, 18)}</div><div class="lab" style="opacity:.7">${esc(s.name)}<div class="st">未检测到 · 安装或登录后会自动出现</div></div>
+        <span class="link" data-manual="${id}" style="font-size:12px">${open ? "收起" : "手动设置"}</span></div>${body ? `<div class="x">${body}</div>` : ""}</div>`;
+    }).join("");
+    const missingGrp = missing.length ? `<div class="grp" style="margin-top:10px"><div class="row" data-act="missing"><div class="lab" style="opacity:.75">本机没有检测到的 AI（${missing.length}）<small>${missing.map(([, , s]) => s.name).join("、")}</small></div><span class="link" style="font-size:12px">${showMissing ? "收起" : "展开"}</span></div>${showMissing ? missingRows : ""}</div>` : "";
 
     const addRow = editing && !editing.id ? `<div class="prov">${editorHTML()}</div>` : `<div class="prov"><div class="row add" data-act="c-new"><div class="ic">${glyph("plus", 16)}</div><div class="lab">添加自定义 AI 工具<small>任何能返回 JSON 用量的接口都能接入：中转站、DeepSeek 余额、公司内部平台…</small></div></div></div>`;
 
@@ -128,8 +158,9 @@
         <div class="row"><div class="lab" style="flex:none">网络代理</div><input data-proxy="1" placeholder="留空 = 跟随系统代理；例：127.0.0.1:7890；填 direct 不走代理" value="${esc(cfg.proxy || "")}" spellcheck="false" /></div>
       </div>
       <div class="hdr">AI 账号与顺序</div>
-      <div class="hint" style="margin-top:0">本机的 AI 会自动识别并接入，不需要手动配置：已登录的 Claude Code / Codex / Cursor / Gemini CLI / Copilot、Claude 桌面版的登录、Claude Code 或 cc-switch 里配置的 Kimi / 智谱 GLM Key 都会自动读取；之后新装或第一次登录的 AI 也会在几秒内自动出现。下面的登录和 Key 只在自动识别不到时才需要。</div>
+      <div class="hint" style="margin-top:0">本机的 AI 会自动识别并接入，不用手动配置：已登录的 Claude Code / Codex / Cursor / Gemini CLI / Copilot、Claude 桌面版的登录、Claude Code 或 cc-switch 里配置的 Kimi / 智谱 GLM Key、腾讯 Box 客户端和「用量健康助手」（token.woa.com）都会自动读取。之后新装或第一次登录的 AI 几秒内会自动出现。「手动设置」只在自动识别不到时才需要。</div>
       <div class="grp">${provs}${addRow}</div>
+      ${missingGrp}
       <div class="foot"><span>版本 ${esc(version)} · <span class="link" data-act="log">查看日志</span></span><button class="btn red" data-act="quit">退出程序</button></div>`;
     if (focus) {
       const el = root.querySelector(focus);
@@ -159,6 +190,8 @@
     if (t.dataset.b === "smartRefresh") return save({ smartRefresh: cfg.smartRefresh === false });
     if (t.dataset.b) return save({ [t.dataset.b]: !cfg[t.dataset.b] });
     if (t.dataset.en) { const id = t.dataset.en; return save({ providers: { [id]: { enabled: !pcOf(id).enabled } } }); }
+    if (t.dataset.manual) { manual[t.dataset.manual] = !manual[t.dataset.manual]; return render(); }
+    if (t.closest("[data-act=missing]")) { showMissing = !showMissing; return render(); }
     if (t.dataset.login) return api.login(t.dataset.login, t.dataset.idp || "");
     if (t.dataset.logout) return api.logout(t.dataset.logout).then(refreshWeb);
     if (t.dataset.up != null || t.dataset.down != null) {
@@ -254,5 +287,7 @@
   api.onWebStatus((w) => { web = w; render(); });
   api.state().then((s) => { cfg = s.cfg; list = s.list; version = s.version; refreshWeb(); });
   api.hotkey().then((h) => { hk = h; render(); }).catch(() => {});
+  api.detected().then((f) => { found = f || {}; render(); }).catch(() => {});
+  api.onDetected((f) => { found = f || {}; if (!typing()) render(); });
   window.__settingsTest = { newCustom: async (p) => { await loadPresets(); editing = { ...(presets[p] || presets.blank) }; render(); } };
 })();
