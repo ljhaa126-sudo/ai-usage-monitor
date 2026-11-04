@@ -569,6 +569,43 @@ function startForeground() {
 }
 const appKey = (n) => String(n || "").trim().replace(/\.(exe|app)$/i, "").toLowerCase();
 
+// ---------------- 自动识别本机的 AI ----------------
+// 启动时、之后每 60 秒、以及主目录 / 应用程序目录有变化时扫描；新装或第一次登录的 AI 自动接入，不用手动配置。
+let detector = null;
+function startDetector() {
+  // 从旧版升级：之前已经在用的 AI 不再提示「已自动接入」
+  if (!Array.isArray(store.cfg.connected)) { store.cfg.connected = Object.keys(store.loadSnapshot() || {}); store.saveCfg(); }
+  const { Detector } = require("./core/detect");
+  detector = new Detector({ log, webSession });
+  detector.on("changed", (ids) => { for (const id of ids) engine.refreshNow(id); });
+  detector.on("claude-session", () => engine.refreshNow("claude"));
+  detector.start();
+  setTimeout(promptLogins, 40000);
+}
+function toast(ev) { if (overlay && !overlay.isDestroyed()) overlay.webContents.send("task", { at: Date.now(), ...ev }); }
+// 第一次拿到某个 AI 的数据：提示「已自动接入」（每个 AI 只提示一次）
+function checkConnected() {
+  const known = Array.isArray(store.cfg.connected) ? store.cfg.connected : [];
+  const fresh = engine.list().filter((s) => s.enabled && s.state === "ok" && !s.fromCache && !known.includes(s.id));
+  if (!fresh.length) return;
+  store.cfg.connected = [...known, ...fresh.map((s) => s.id)];
+  store.saveCfg();
+  for (const s of fresh) {
+    log(`[detect] 已自动接入 ${s.name}（${s.source || "本机登录"}）`);
+    toast({ ai: s.id, kind: "found", label: s.name, title: s.name, preview: s.source ? "来源：" + s.source : "", key: "found:" + s.id });
+  }
+}
+// 装了但读不到登录（例如只装了桌面版、钥匙串没允许）：提示一次「点此登录」，之后不再打扰
+function promptLogins() {
+  if (!detector) return;
+  const asked = Array.isArray(store.cfg.loginPrompted) ? store.cfg.loginPrompted : [];
+  const todo = engine.list().filter((s) => s.enabled && s.state === "nologin" && s.login && detector.found[s.id] && !asked.includes(s.id));
+  if (!todo.length) return;
+  store.cfg.loginPrompted = [...asked, ...todo.map((s) => s.id)];
+  store.saveCfg();
+  for (const s of todo) toast({ ai: s.id, kind: "login", label: s.name, title: `检测到 ${s.name}（${detector.found[s.id]}）`, preview: "还读不到它的登录，登录一次之后会自动显示用量", key: "login:" + s.id });
+}
+
 // 一条「完成 / 需要处理」提醒：图标脉冲 + 通知卡片
 function onTaskEvent(ev) {
   const pc = store.cfg.providers[ev.ai];
@@ -660,8 +697,9 @@ app.whenReady().then(async () => {
     setTimeout(() => { const w = loginWins.workbuddy; log(`[diag-login] ${process.env.AIMON_DIAG_LOGIN} -> ${w && !w.isDestroyed() ? w.webContents.getURL().split("?")[0] : "closed"}`); app.exit(0); }, 12000);
     return;
   }
-  engine = MOCK ? mockEngine() : new Engine(store, { webSession, isOnline: () => net.isOnline(), log }, log);
+  engine = MOCK ? mockEngine() : new Engine(store, { webSession, isOnline: () => net.isOnline(), log, autoCfg: (id) => (detector ? detector.autoCfg(id) : null) }, log);
   engine.on("update", broadcast);
+  if (!MOCK) engine.on("update", checkConnected);
   ipc();
   createOverlay();
   if (!SHOT) {
@@ -670,6 +708,7 @@ app.whenReady().then(async () => {
     // Windows：左键单击托盘图标也弹出菜单
     if (process.platform === "win32") tray.on("click", () => tray.popUpContextMenu());
   }
+  if (!MOCK) { try { startDetector(); } catch (e) { log("[detect] 启动失败 " + e.message); } }
   engine.start();
   startTaskWatcher();
   registerHotkey();
@@ -691,5 +730,5 @@ app.whenReady().then(async () => {
 
 app.on("second-instance", () => { if (overlay) { overlay.showInactive(); keepOnTop(); } openSettings(); });
 app.on("window-all-closed", (e) => e.preventDefault());
-app.on("will-quit", () => { try { globalShortcut.unregisterAll(); } catch { /* ignore */ } });
+app.on("will-quit", () => { try { globalShortcut.unregisterAll(); } catch { /* ignore */ } try { if (detector) detector.stop(); } catch { /* ignore */ } });
 app.on("will-quit", () => { try { if (fgWatcher) fgWatcher.stop(); if (winActivator) winActivator.stop(); } catch { /* ignore */ } });

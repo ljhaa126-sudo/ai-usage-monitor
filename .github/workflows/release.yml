@@ -55,6 +55,8 @@ jobs:
           node test/engine.test.js
           node test/v165.test.js "$PWD/app"
           node test/chat.test.js "$PWD/app"
+          node test/done.test.js "$PWD/app"
+          node test/detect.test.js "$PWD/app"
 
       - name: 构建 Mac（arm64 + x64）和 Windows（x64）
         if: steps.ver.outputs.skip != '1'

@@ -141,4 +141,4 @@ async function cursorToken() {
   return { token: best, found };
 }
 
-module.exports = { keychain, claudeCodeOAuth, cursorToken, macSafeStorageDecrypt, winSafeStorageDecrypt };
+module.exports = { keychain, claudeCodeOAuth, cursorToken, macSafeStorageDecrypt, winSafeStorageDecrypt, winMasterKey };

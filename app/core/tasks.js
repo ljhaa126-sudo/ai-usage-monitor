@@ -21,7 +21,8 @@ const home = () => process.env.AIMON_TASK_HOME || util.home();
 const RECENT_MS = 6 * 3600e3;   // 只看 6 小时内有改动的会话
 const HEAD_BYTES = 64 * 1024;   // 历史文件：读开头拿标题
 const TAIL_BYTES = 384 * 1024;  // 历史文件：读末尾拿当前状态（标题取最后一条需求，在末尾附近）
-const SETTLE = { done: 2500, input: 800 };
+// 「完成」要安静 6 秒（期间日志没有任何新动作）才确认；「需要处理」0.8 秒
+const SETTLE = { done: 6000, input: 800 };
 
 // ---------------- 文本工具 ----------------
 function clean(s) {
@@ -65,23 +66,39 @@ const PARSERS = {
       if (pl.originator) s.origin = String(pl.originator);
       const src = typeof pl.source === "string" ? pl.source : (pl.source && Object.keys(pl.source)[0]) || "";
       if (src) s.srcKind = src;
-      s.skip = src === "exec" || pl.thread_source === "subagent"; // 别的工具在后台调起的一次性任务，没有界面可跳转
+      // 不提醒的会话：别的工具在后台调起的一次性任务（exec / mcp），以及主任务派生的子代理
+      // （新版 Codex 的子代理写成 source: {"subagent": ...}，审查 / 压缩上下文 / 并行子任务都是），
+      // 它们每完成一步都会写 task_complete，但主任务还在跑——以前就是这里导致会话中途不停弹窗。
+      const srcJson = JSON.stringify(pl.source || "") + " " + String(pl.thread_source || "");
+      s.skip = /^(exec|mcp|subagent)$/i.test(src) || /subagent|thread_spawn|parent_thread|review|compact/i.test(srcJson) || !!(pl.parent_thread_id || pl.forked_from_id);
+      return null;
+    }
+    // 你发出的消息（新版 Codex 还会单独写一条 user_message 事件）
+    if (e.type === "event_msg" && pl.type === "user_message") {
+      const t = String(pl.message || "");
+      if (t && !isSystemish(t)) { s.title = cut(codexAsk(t)); return { sig: "run", user: true }; }
       return null;
     }
     if (e.type === "response_item" && pl.type === "message" && pl.role === "user") {
       const t = textOf(pl.content, ["input_text", "text"]);
       if (t && isDispatch(t)) s.skip = true;
-      if (t && !isSystemish(t)) s.title = cut(codexAsk(t)); // 每轮更新为最新一条需求
+      if (t && !isSystemish(t)) { s.title = cut(codexAsk(t)); return { sig: "run", user: true }; } // 每轮更新为最新一条需求
       return null;
     }
-    if (e.type !== "event_msg") return null;
-    if (pl.type === "task_started") return { sig: "run", user: true };
+    if (e.type !== "event_msg") {
+      // 回复 / 工具调用等：说明还在干活
+      if (e.type === "response_item") return { sig: "busy" };
+      return null;
+    }
+    if (pl.type === "task_started") return { sig: "run" }; // 也可能是 Codex 自己接着跑的下一轮，不算你的新请求
     if (pl.type === "task_complete") return { sig: pl.error ? "input" : "done", preview: cut(pl.last_agent_message || "", 80), error: !!pl.error };
     if (pl.type === "turn_aborted") return { sig: "idle" };
     if (/approval_request|request_user_input|elicitation_request/.test(pl.type || "")) return { sig: "input", preview: "等待你批准操作" };
-    return null;
+    if (/^(token_count|turn_diff|thread_name_updated|session_configured)$/.test(pl.type || "")) return null; // 收尾的统计信息，不算动作
+    return { sig: "busy" }; // 其他事件（执行命令、思考、输出…）：还在干活
   },
   claude(e, s) {
+    if (e.isSidechain) return { sig: "busy" }; // 子代理（Task 工具）在主日志里的消息：主任务还在跑
     s.sid = e.sessionId || s.sid;
     if (e.cwd) s.cwd = e.cwd;
     if (e.entrypoint) s.origin = String(e.entrypoint);
@@ -92,7 +109,7 @@ const PARSERS = {
       const t = textOf(c, ["text"]);
       if (t && isDispatch(t)) s.skip = true;
       if (t && !isSystemish(t) && !e.isMeta) s.title = cut(t);
-      return { sig: "run", user: !e.isMeta };
+      return { sig: "run", user: !e.isMeta && !!t && !isSystemish(t) };
     }
     if (e.type === "assistant" && e.message) {
       const c = Array.isArray(e.message.content) ? e.message.content : [];
@@ -233,6 +250,9 @@ class TaskWatcher {
       if (!p || now - p.at < SETTLE[p.kind]) continue;
       s.pending = null;
       if (!s.armed || s.skip) continue;
+      // 一个请求只提醒一次「完成」：Codex / Claude 自己接着跑的后续几轮不再重复提醒，等你发出下一个请求
+      if (p.kind === "done" && !s.asked) continue;
+      if (p.kind === "done") s.asked = false;
       s.armed = p.kind === "input"; // 需要处理之后用户回复会再次进入「进行中」；完成后要等下一轮任务
       events.push({
         ai: f.src.id, kind: p.kind, title: s.title || "（未命名任务）", preview: p.preview || "", error: !!p.error,
@@ -265,8 +285,8 @@ class TaskWatcher {
     const s = f.s;
     let recent = false;
     try { recent = fs.statSync(file).mtimeMs > this.now() - 10 * 60e3; } catch { /* ignore */ }
-    if (recent && !s.skip && s.lastSig === "run") { s.armed = true; s.pending = null; }
-    else if (recent && !s.skip && s.pending && s.pending.kind === "input") { s.armed = true; s.pending.at = this.now(); }
+    if (recent && !s.skip && (s.lastSig === "run" || s.lastSig === "busy")) { s.armed = true; s.asked = true; s.pending = null; }
+    else if (recent && !s.skip && s.pending && s.pending.kind === "input") { s.armed = true; s.asked = true; s.pending.at = this.now(); }
     else s.pending = null;
   }
 
@@ -296,9 +316,16 @@ class TaskWatcher {
     try { r = PARSERS[f.src.id](e, f.s); } catch { r = null; }
     if (!r) return;
     const s = f.s;
+    if (r.sig === "busy") {
+      // 「完成」之后又有新动作：说明还没彻底完成（Codex 自己接着跑下一轮、还有工具在执行……），取消这次提醒
+      s.pending = null;
+      s.lastSig = "busy";
+      return;
+    }
     if (r.sig === "run") {
       s.pending = null;
       if (live) s.armed = true;
+      if (live && r.user) s.asked = true; // 你发出了新的请求：这个请求彻底完成时提醒一次
       // 你发出这条消息时停在哪个软件里——任务多半就跑在那里，点提醒时优先切回它
       if (live && r.user) {
         let fa = "";

@@ -150,7 +150,7 @@ const ok = (name) => { pass++; console.log("  ✓ " + name); };
   line({ type: "user", sessionId: "S1", cwd: "/Users/me/proj", entrypoint: "claude-vscode", message: { role: "user", content: [{ type: "tool_result", content: "ok" }] } });
   line({ type: "assistant", sessionId: "S1", cwd: "/Users/me/proj", message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "改好了" }] } });
   tw.tick();
-  now += 3000;
+  now += 7000;
   const evs = tw.tick();
   assert.strictEqual(evs.length, 1);
   assert.strictEqual(evs[0].cwd, "/Users/me/proj");

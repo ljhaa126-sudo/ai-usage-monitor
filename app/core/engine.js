@@ -200,7 +200,10 @@ class Engine extends EventEmitter {
       this.emit("update");
       return;
     }
-    const pc = this.provCfg(id);
+    const pc0 = this.provCfg(id);
+    // 没有手动填 Key：用自动识别到的（环境变量 / Claude Code 设置 / cc-switch 等）
+    const auto = !String(pc0.apiKey || "").trim() && this.ctx.autoCfg ? this.ctx.autoCfg(id) : null;
+    const pc = auto ? { ...pc0, apiKey: auto.apiKey, ...(auto.region ? { region: auto.region } : {}) } : pc0;
     s.inflight = true;
     s.lastAt = Date.now();
     const prev = this.status[id];
@@ -214,6 +217,7 @@ class Engine extends EventEmitter {
     let out;
     if (!err) {
       out = { ...this.base(d, "ok"), ...st, state: "ok", updatedAt: Date.now() };
+      if (auto) out.source = "自动识别（" + auto.from + "）";
       s.fails = 0;
       s.nextAt = Date.now() + interval;
     } else if (err.noLogin) {

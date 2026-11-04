@@ -595,6 +595,16 @@
   }
 
   function toastHTML(ev) {
+    if (ev.kind === "found" || ev.kind === "login") {
+      const found = ev.kind === "found";
+      return `<div class="t-in">
+      <div class="t-head"><span class="t-g">${glyph(ev.ai, 17)}</span><span class="t-ai">${esc(ev.label || AI_NAME[ev.ai] || ev.title)}</span>
+        <span class="t-st ${found ? "ok" : "need"}">${found ? "✓ 已自动接入" : "● 检测到"}</span><span class="t-x" data-x="1" title="关闭">✕</span></div>
+      <div class="t-title">${esc(ev.title)}</div>
+      ${ev.preview ? `<div class="t-pre">${esc(ev.preview)}</div>` : ""}
+      <div class="t-foot"><span>${found ? "点击查看用量" : "点击登录（只需一次）"}</span><span class="t-cd"></span></div>
+      <div class="t-bar"><i></i></div></div>`;
+    }
     const need = ev.kind === "input";
     const label = need ? (ev.error ? "任务出错，需要你处理" : "需要你处理") : ev.chat ? "已回复" : "任务已完成";
     const name = ev.label || AI_NAME[ev.ai] || ev.ai;
@@ -655,7 +665,7 @@
     for (const t of [...toasts]) if (t.ev.key === ev.key) closeToast(t);
     while (toasts.length >= 3) closeToast(toasts[0]);
     const el = document.createElement("div");
-    el.className = "toast hit " + (ev.kind === "input" ? "need" : "ok");
+    el.className = "toast hit " + (ev.kind === "input" || ev.kind === "login" ? "need" : "ok");
     el.innerHTML = toastHTML(ev);
     document.body.appendChild(el);
     const t = { ev, el, born: Date.now(), left: TOAST_MS, timer: 0 };
@@ -667,6 +677,8 @@
       e.stopPropagation();
       closeToast(t);
       if (e.target.closest("[data-x]")) return;
+      if (ev.kind === "found") { pinned = ev.ai; showPop(ev.ai); renderBar(); return; }
+      if (ev.kind === "login") { try { await api.login(ev.ai, ""); } catch { /* ignore */ } return; }
       try { await api.openTask(ev); } catch { /* ignore */ }
     });
     el.style.setProperty("--toast-ms", TOAST_MS + "ms");

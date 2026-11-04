@@ -496,6 +496,15 @@ function copilotDiskToken() {
     if (!j) continue;
     for (const [k, v] of Object.entries(j)) if (k.startsWith("github.com") && v && v.oauth_token) return v.oauth_token;
   }
+  // GitHub CLI（gh auth login）保存在文件里的令牌
+  const gh = [path.join(home(), ".config", "gh", "hosts.yml")];
+  if (process.env.APPDATA) gh.unshift(path.join(process.env.APPDATA, "GitHub CLI", "hosts.yml"));
+  for (const f of gh) {
+    let t = "";
+    try { t = fs.readFileSync(f, "utf8"); } catch { continue; }
+    const m = /github\.com:[\s\S]*?oauth_token:\s*(\S+)/.exec(t);
+    if (m) return m[1];
+  }
   return "";
 }
 

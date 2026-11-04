@@ -1,5 +1,21 @@
 # 更新日志
 
+## 1.6.9
+
+- **任务彻底完成才提醒**（修复 Codex 会话进行中不停弹窗）：
+  - 新版 Codex 的子代理（并行子任务、审查、压缩上下文）每完成一步都会写「完成」，以前被当成任务完成弹窗；现在全部忽略，只看主任务。
+  - 一个请求只提醒一次：Codex / Claude 自己接着跑的后续几轮不再重复弹窗，等你发出下一个请求。
+  - 「完成」后要安静 6 秒才确认，期间有任何新动作（执行命令、继续输出）就取消；Claude Code 子代理的输出也不算。
+  - 「需要你处理」（批准操作、回答问题）照常立即提醒。
+- **自动识别本机的 AI，不用手动配置**：
+  - 启动时扫描，之后每 60 秒一次，主目录 / 应用程序目录有变化时几秒内再扫；之后新装或第一次登录的 AI 自动接入，并弹出「已自动接入」。
+  - 只装了 Claude 桌面版：自动读取桌面版保存的登录（macOS 首次会弹出钥匙串授权，选「始终允许」），不用再点「登录网页版」。
+  - Kimi / 智谱 GLM：自动从环境变量、shell 配置文件、Claude Code 设置、cc-switch、Claude Code Router、Kimi CLI 的配置里找 API Key。
+  - Copilot：也会读取 GitHub CLI（gh）的登录。
+  - 装了但读不到登录的 AI：提示一次「检测到 X，点击登录」，之后不再打扰。
+- **Only notify when a task is fully done**: Codex sub-agents and auto-continued turns no longer trigger alerts mid-session.
+- **Automatic AI detection**: installed / newly installed AIs are connected automatically, including the Claude desktop app login and Kimi / GLM keys already configured on the machine.
+
 ## 1.6.8
 
 - **显示 / 隐藏悬浮条快捷键**：macOS `⌃⌥⌘U`（Control+Option+Command+U），Windows `Ctrl+Alt+Shift+U`。

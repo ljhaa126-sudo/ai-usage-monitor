@@ -128,6 +128,7 @@
         <div class="row"><div class="lab" style="flex:none">网络代理</div><input data-proxy="1" placeholder="留空 = 跟随系统代理；例：127.0.0.1:7890；填 direct 不走代理" value="${esc(cfg.proxy || "")}" spellcheck="false" /></div>
       </div>
       <div class="hdr">AI 账号与顺序</div>
+      <div class="hint" style="margin-top:0">本机的 AI 会自动识别并接入，不需要手动配置：已登录的 Claude Code / Codex / Cursor / Gemini CLI / Copilot、Claude 桌面版的登录、Claude Code 或 cc-switch 里配置的 Kimi / 智谱 GLM Key 都会自动读取；之后新装或第一次登录的 AI 也会在几秒内自动出现。下面的登录和 Key 只在自动识别不到时才需要。</div>
       <div class="grp">${provs}${addRow}</div>
       <div class="foot"><span>版本 ${esc(version)} · <span class="link" data-act="log">查看日志</span></span><button class="btn red" data-act="quit">退出程序</button></div>`;
     if (focus) {

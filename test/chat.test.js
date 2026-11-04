@@ -123,7 +123,7 @@ let pass = 0; const ok = (n) => { pass++; console.log("  ✓ " + n); };
   const tw = new TaskWatcher({ sources: [{ id: "claude", roots: () => [dir], depth: 1, match: (n) => n.endsWith(".jsonl"), link: () => "" }], now: () => tn });
   tw.tick();
   fs.appendFileSync(f, JSON.stringify({ type: "assistant", sessionId: "S", message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "通过" }] } }) + "\n");
-  tw.tick(); tn += 3000;
+  tw.tick(); tn += 7000;
   evs = tw.tick();
   assert.strictEqual(evs.length, 1);
   ok("程序启动前就在跑的任务，跑完也提醒");
