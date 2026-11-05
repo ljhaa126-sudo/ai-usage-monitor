@@ -38,6 +38,14 @@ svg { display: block; overflow: visible; }
 .item.idle .pct { color: rgba(255,255,255,.35); }
 .item .dot { position: absolute; top: 4px; right: 6px; width: 8px; height: 8px; border-radius: 50%; background: #FF9F0A; box-shadow: 0 0 0 2px #000; }
 .item .dot.err { background: #FF3B30; }
+
+/* 顶部横向 */
+.bar.h .items { flex-direction: row; width: auto; height: auto; align-items: flex-start; gap: calc(var(--gap, 20px) * .55); }
+.bar.h .item { width: 60px; gap: 4px; padding: 2px 0; }
+/* 只显示进度：不显示数字，图标更紧凑 */
+.bar.nonum .item .pct { display: none; }
+.bar.nonum .item { gap: 0; padding: 2px 0; }
+.bar.nonum:not(.h) .items { gap: calc(var(--gap, 20px) * .7); }
 .item.loading svg.r { animation: spin 1.1s linear infinite; }
 @keyframes spin { to { transform: rotate(270deg); } }
 

@@ -349,6 +349,7 @@ function buildMenu() {
     { label: "位置", submenu: [
       { label: "吸附屏幕右侧", type: "radio", checked: c.dock.mode === "edge" && c.dock.edge === "right", click: () => updateCfg({ dock: { ...c.dock, mode: "edge", edge: "right" } }) },
       { label: "吸附屏幕左侧", type: "radio", checked: c.dock.mode === "edge" && c.dock.edge === "left", click: () => updateCfg({ dock: { ...c.dock, mode: "edge", edge: "left" } }) },
+      { label: "吸附屏幕顶部（横向）", type: "radio", checked: c.dock.mode === "edge" && c.dock.edge === "top", click: () => updateCfg({ dock: { ...c.dock, mode: "edge", edge: "top" } }) },
       { label: "自由摆放", type: "radio", checked: c.dock.mode === "float", click: () => updateCfg({ dock: { ...c.dock, mode: "float" } }) },
       { type: "separator" },
       ...screen.getAllDisplays().map((d, i) => ({ label: `显示在屏幕 ${i + 1}（${d.size.width}×${d.size.height}）`, type: "radio", checked: targetDisplay().id === d.id, click: () => { updateCfg({ dock: { ...store.cfg.dock, displayId: d.id } }); fitOverlay(); } })),

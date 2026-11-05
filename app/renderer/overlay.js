@@ -47,6 +47,19 @@
     return list.filter((s) => s.enabled && (!hide || has(s) || pulses[s.id])); // 有提醒脉冲的图标即使未连接也显示
   };
   const byId = (id) => list.find((s) => s.id === id);
+  // 显示方式：已用（默认）/ 剩余。颜色始终按「已用」算（快用完时仍然变红）
+  const remainMode = () => !!cfg && cfg.valueMode === "remain";
+  const shown = (v) => (remainMode() ? 100 - v : v);
+  const verb = () => (remainMode() ? "剩余" : "已用");
+  // 「已用 25 / 200」→「剩余 175 / 200」（两边单位相同时才换算）
+  function detailText(d) {
+    if (!remainMode() || !d) return d;
+    return String(d).replace(/已用 ([\d.]+)( ?[万亿KMB]?) \/ ([\d.]+)( ?[万亿KMB]?)/, (m, a, ua, b, ub) => {
+      if (ua.trim() !== ub.trim()) return m;
+      const dec = (b.split(".")[1] || "").length;
+      return `剩余 ${Math.max(0, Number(b) - Number(a)).toFixed(dec)}${ua} / ${b}${ub}`;
+    });
+  }
 
   // ---------------- 竖条 ----------------
   // 竖条图标的圆环：外圈 = 当前会话（5 小时）用量；内圈 = 本周 / 总用量（设置里可以关掉）
@@ -77,18 +90,21 @@
       const ok = has(s);
       const loading = s.state === "loading" && !s.updatedAt;
       const v = ok ? s.headline : 0;
+      const bal = !!s.headlineText; // 余额类（DeepSeek）不换算剩余
+      const sv = ok && !bal ? Math.max(0, Math.min(100, shown(v))) : v;
       const arc = el.querySelector(".arc");
       const c = 2 * Math.PI * 22;
       arc.setAttribute("stroke", loading ? "rgba(255,255,255,.35)" : color(v));
-      arc.setAttribute("stroke-dashoffset", loading ? c * 0.78 : v > 0 ? c * (1 - Math.min(100, v) / 100) : c);
+      arc.setAttribute("stroke-dashoffset", loading ? c * 0.78 : sv > 0 ? c * (1 - Math.min(100, sv) / 100) : c);
       // 内圈：同时有「当前会话」和「本周 / 总额度」两种额度时显示后者
       const second = ok && s.primary && s.secondary ? s.secondary : null;
       const showIn = !!second && cfg && cfg.innerRing !== false && !loading;
       el.classList.toggle("in2", showIn);
       if (showIn) {
         const v2 = Math.max(0, Math.min(100, second.usedPercent || 0));
+        const s2 = Math.max(0, Math.min(100, shown(v2)));
         const a2 = el.querySelector(".arc2");
-        if (a2) { a2.setAttribute("stroke", color(v2)); a2.setAttribute("stroke-dashoffset", v2 > 0 ? IN_C * (1 - v2 / 100) : IN_C); }
+        if (a2) { a2.setAttribute("stroke", color(v2)); a2.setAttribute("stroke-dashoffset", s2 > 0 ? IN_C * (1 - s2 / 100) : IN_C); }
       }
       el.classList.toggle("idle", !ok && !loading);
       el.classList.toggle("loading", loading);
@@ -96,7 +112,7 @@
       const pu = pulses[s.id];
       el.classList.toggle("notify", !!pu);
       el.classList.toggle("need", !!pu && pu.kind === "input");
-      el.querySelector(".pct").textContent = loading ? "…" : ok ? (s.headlineText || Math.round(v) + "%") : "—"; // 余额类（DeepSeek）显示金额
+      el.querySelector(".pct").textContent = loading ? "…" : ok ? (s.headlineText || Math.round(shown(v)) + "%") : "—"; // 余额类（DeepSeek）显示金额
       let dot = el.querySelector(".dot");
       const want = s.state === "error" || s.state === "stale" ? "dot err" : s.state === "nologin" ? "dot" : "";
       if (want && !dot) { dot = document.createElement("span"); el.appendChild(dot); }
@@ -115,8 +131,44 @@
     return `M ${r} 0 H ${W - r} A ${r} ${r} 0 0 1 ${W} ${r} V ${H - r} A ${r} ${r} 0 0 1 ${W - r} ${H} H ${r} A ${r} ${r} 0 0 1 0 ${H - r} V ${r} A ${r} ${r} 0 0 1 ${r} 0 Z`;
   }
 
+  // 贴顶部时横向排列
+  const HPAD = 22, TPAD = 9; // 横向：两端内边距、上下内边距
+  const isTop = () => !!cfg && cfg.dock.mode === "edge" && cfg.dock.edge === "top" && !(drag && drag.moved);
+  function layoutTop() {
+    const Wv = window.innerWidth;
+    const d = cfg.dock;
+    const len = itemsEl.offsetWidth + HPAD * 2;   // 主体长度（不含两端内凹弧）
+    const th = itemsEl.offsetHeight + TPAD * 2;   // 厚度
+    Z = clampZ(cfg.zoom);
+    Z = Math.max(ZMIN, Math.min(Z, Wv / (len + 2 * F + 16)));
+    const w = len + 2 * F;
+    const cx = (d.tx == null ? 0.5 : Math.max(0, Math.min(1, d.tx))) * Wv; // 记录的是中心位置
+    const left = Math.round(Math.max(0, Math.min(Wv - w * Z, cx - (w * Z) / 2)));
+    const top = 0;
+    itemsEl.style.top = TPAD + "px";
+    itemsEl.style.left = F + HPAD + "px";
+    // 复用竖条的贴边形状：转置 + 翻转，贴在屏幕顶边，两端是内凹弧
+    shapePath.setAttribute("d", pathEdge(th, len));
+    shapeSvg.setAttribute("width", th);
+    shapeSvg.setAttribute("height", w);
+    shapeSvg.setAttribute("viewBox", `0 0 ${th} ${w}`);
+    shapeSvg.style.transformOrigin = "0 0";
+    shapeSvg.style.transform = `matrix(0,-1,1,0,0,${th})`;
+    Object.assign(bar.style, { left: left + "px", top: top + "px", width: w + "px", height: th + "px", transform: Z === 1 ? "" : `scale(${Z})`, transformOrigin: "0 0" });
+    bar.classList.remove("float", "dragging");
+    geo = { left, top, bodyTop: top, bodyH: th * Z, w: w * Z, mode: "edge", edge: "top", bodyLeft: left + F * Z, bodyW: len * Z };
+    if (popId) placeBubble(pop, popId, 272);
+    if (cardId) placeBubble(card, cardId, 360);
+    placeToasts();
+  }
+
   function layout() {
     if (!cfg) return;
+    bar.classList.toggle("h", isTop());
+    bar.classList.toggle("nonum", !!cfg.hideNumbers);
+    if (isTop()) return layoutTop();
+    itemsEl.style.left = "";
+    shapeSvg.style.transformOrigin = "";
     const Wv = window.innerWidth, Hv = window.innerHeight;
     const bodyH = itemsEl.offsetHeight + PAD * 2;
     const d = cfg.dock;
@@ -161,6 +213,7 @@
 
   // ---------------- 气泡 / 面板定位（带尾巴，指向对应图标） ----------------
   function side() {
+    if (geo.mode === "edge" && geo.edge === "top") return "below";
     if (geo.mode === "edge") return geo.edge === "right" ? "left" : "right";
     return geo.left + geo.w / 2 < window.innerWidth / 2 ? "right" : "left";
   }
@@ -172,10 +225,38 @@
     return r.top + r.height / 2;
   }
 
+  function anchorX(id) {
+    const el = itemsEl.querySelector(`.item[data-id="${id}"] .ring`);
+    if (!el) return geo.left + geo.w / 2;
+    const r = el.getBoundingClientRect();
+    return r.left + r.width / 2;
+  }
+  // 尾巴朝上（顶部横向时，气泡在竖条下方）
+  function tailUp(el, tx) {
+    let tail = el.querySelector(":scope > .tail");
+    if (!tail) {
+      tail = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      tail.setAttribute("class", "tail");
+      tail.setAttribute("viewBox", "0 0 16 34");
+      tail.innerHTML = '<path d="M0 0 C5 5.5 9.5 11.5 16 17 C9.5 22.5 5 28.5 0 34 Z"/>';
+      el.appendChild(tail);
+    }
+    tail.style.display = "";
+    Object.assign(tail.style, { left: tx - 17 + "px", top: "1px", right: "", transformOrigin: "0 0", transform: "rotate(-90deg)" });
+  }
+
   function placeBubble(el, id, w) {
     const Hv = window.innerHeight;
     const h = el.offsetHeight;
     const sd = side();
+    if (sd === "below") {
+      const Wv = window.innerWidth, ax = anchorX(id);
+      const x = Math.round(Math.max(8, Math.min(Wv - w * Z - 8, ax - (w * Z) / 2)));
+      const y = Math.round(geo.top + geo.bodyH + GAP * Z);
+      Object.assign(el.style, { left: x + "px", top: y + "px", transform: Z === 1 ? "" : `scale(${Z})`, transformOrigin: "0 0" });
+      tailUp(el, Math.max(26, Math.min(w - 26, (ax - x) / Z)));
+      return;
+    }
     const ay = anchorY(id);
     const x = sd === "left" ? geo.left - (GAP + w) * Z : geo.left + geo.w + GAP * Z;
     const y = Math.round(Math.max(8, Math.min(Hv - h * Z - 8, ay - (h * Z) / 2)));
@@ -189,6 +270,7 @@
       el.appendChild(tail);
     }
     const ty = Math.max(16, Math.min(h - 50, (ay - y) / Z - 17));
+    tail.style.transformOrigin = "";
     Object.assign(tail.style, sd === "left" ? { left: w - 1 + "px", right: "", top: ty + "px", transform: "" } : { left: "-15px", top: ty + "px", transform: "scaleX(-1)" });
   }
 
@@ -207,9 +289,11 @@
         <div class="u num" style="font-size:15px;color:${v >= 100 ? "#FF453A" : "#fff"}">${esc(w.detail || "")}</div></div>`;
         continue;
       }
+      const sv = Math.max(0, Math.min(100, shown(v)));
+      const nums = !(cfg && cfg.hideNumbers); // 「只显示进度」时不写数字
       h += `<div class="sec"><div class="l"><span>${esc(w.label)}</span><span class="num" ${unl || !w.resetsAt ? "" : `data-cd="${w.resetsAt}" data-fmt="reset"`}>${unl || !w.resetsAt ? "" : resetText(w)}</span></div>
-        <div class="track"><div class="fill" style="width:${unl ? 0 : Math.max(v > 0 ? 2 : 0, v)}%;background:${color(v)}"></div></div>
-        <div class="u num">${unl ? "不限量" : `已用 ${Math.round(v)}%`}${w.detail && !unl ? `<span style="color:rgba(235,235,245,.45)"> · ${esc(w.detail)}</span>` : ""}</div></div>`;
+        <div class="track"><div class="fill" style="width:${unl ? (remainMode() ? 100 : 0) : Math.max(sv > 0 ? 2 : 0, sv)}%;background:${color(v)}"></div></div>
+        ${nums ? `<div class="u num">${unl ? "不限量" : `${verb()} ${Math.round(sv)}%`}${w.detail && !unl ? `<span style="color:rgba(235,235,245,.45)"> · ${esc(detailText(w.detail))}</span>` : ""}</div>` : ""}</div>`;
     }
     if (s.resets) {
       const n = s.resets.available || 0;
@@ -262,9 +346,9 @@
   }
 
   // ---------------- 详细面板（当前 Windows 版的完整内容） ----------------
-  function bigRing(v) {
+  function bigRing(v, cv = v) { // v：圆环长度；cv：按「已用」算的颜色
     const sz = 70, st = 7, r = (sz - st) / 2, c = 2 * Math.PI * r;
-    return `<svg viewBox="0 0 ${sz} ${sz}" width="${sz}" height="${sz}"><circle cx="35" cy="35" r="${r}" fill="none" stroke="#2a2a2c" stroke-width="${st}"/>${v > 0 ? `<circle cx="35" cy="35" r="${r}" fill="none" stroke="${color(v)}" stroke-width="${st}" stroke-linecap="round" stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - Math.min(100, v) / 100)}"/>` : ""}</svg>`;
+    return `<svg viewBox="0 0 ${sz} ${sz}" width="${sz}" height="${sz}"><circle cx="35" cy="35" r="${r}" fill="none" stroke="#2a2a2c" stroke-width="${st}"/>${v > 0 ? `<circle cx="35" cy="35" r="${r}" fill="none" stroke="${color(cv)}" stroke-width="${st}" stroke-linecap="round" stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - Math.min(100, v) / 100)}"/>` : ""}</svg>`;
   }
 
   function chart(s) {
@@ -375,23 +459,24 @@
         <div class="v num" style="color:${v >= 100 ? "#FF453A" : "#fff"}">${esc(s.headlineText || "")}</div>
         <div class="s">${esc(main.detail || "")}</div></div></div></div>`;
       else hero = `<div class="grp pd"><div class="hero"><div class="t"><div class="k">${esc(main.label)}</div>
-        <div class="v num" style="color:${v >= 70 ? color(v) : "#fff"}">${P(v).replace("%", "")}<small>% 已用</small></div>
-        <div class="s">${main.detail ? esc(main.detail) + " · " : ""}剩余 ${P(100 - v)}</div></div><div class="bigring">${bigRing(v)}</div></div>
+        <div class="v num" style="color:${v >= 70 ? color(v) : "#fff"}">${P(shown(v)).replace("%", "")}<small>% ${verb()}</small></div>
+        <div class="s">${main.detail ? esc(detailText(main.detail)) + " · " : ""}${remainMode() ? "已用 " + P(v) : "剩余 " + P(100 - v)}</div></div><div class="bigring">${bigRing(shown(v), v)}</div></div>
         <div class="meta"><span class="num" ${main.resetsAt ? `data-cd="${main.resetsAt}" data-fmt="left"` : ""}>${main.resetsAt ? left(main.resetsAt - Date.now()) : "重置时间未知"}</span><span>${elapsed ? `窗口已过 <b>${elapsed}</b>` : main.resetsAt ? `<b>${window.UI.at(main.resetsAt)}</b>` : ""}</span></div></div>`;
     }
     let week = "";
     if (second) {
       const v = second.usedPercent, ad = s.activeDays || [], today = (new Date().getDay() + 6) % 7;
-      week = `<div class="grp pd"><div class="line"><span class="n">${esc(second.label)}</span><span class="p num" style="color:${v >= 70 ? color(v) : "#fff"}">${P(v)}</span></div>
-        <div class="track"><div class="fill" style="width:${Math.max(v > 0 ? 2 : 0, v)}%;background:${color(v)}"></div></div>
+      const sv2 = shown(v);
+      week = `<div class="grp pd"><div class="line"><span class="n">${esc(second.label)}</span><span class="p num" style="color:${v >= 70 ? color(v) : "#fff"}">${verb()} ${P(sv2)}</span></div>
+        <div class="track"><div class="fill" style="width:${Math.max(sv2 > 0 ? 2 : 0, sv2)}%;background:${color(v)}"></div></div>
         ${ad.length === 7 ? `<div class="days">${["一", "二", "三", "四", "五", "六", "日"].map((d, i) => `<div class="${i === today ? "today" : ""}"><i class="${ad[i] ? "on" : ""}"></i>${d}</div>`).join("")}</div>` : ""}
         <div class="meta"><span class="num" ${second.resetsAt ? `data-cd="${second.resetsAt}" data-fmt="reset"` : ""}>${resetText(second) || "重置时间未知"}</span><span>${s.primary && s.primary.key === "5h" ? `本周已重置 <b>${s.resetCount || 0}</b> 次` : ""}</span></div></div>`;
     }
     const ex = (s.extra || []).length ? `<div><div class="hdr">其他额度</div><div class="grp">${s.extra.map((w) => {
       const unl = w.detail === "不限";
-      return `<div class="row col"><div class="line"><span class="n">${esc(w.label)}</span><span class="p num">${unl ? "不限" : P(w.usedPercent)}</span></div>
-      ${unl ? "" : `<div class="track"><div class="fill" style="width:${w.usedPercent}%;background:${color(w.usedPercent)}"></div></div>`}
-      <div class="sub"><span>${unl ? "" : esc(w.detail)}</span><span class="num" ${w.resetsAt ? `data-cd="${w.resetsAt}" data-fmt="reset"` : ""}>${resetText(w)}</span></div></div>`;
+      return `<div class="row col"><div class="line"><span class="n">${esc(w.label)}</span><span class="p num">${unl ? "不限" : verb() + " " + P(shown(w.usedPercent))}</span></div>
+      ${unl ? "" : `<div class="track"><div class="fill" style="width:${shown(w.usedPercent)}%;background:${color(w.usedPercent)}"></div></div>`}
+      <div class="sub"><span>${unl ? "" : esc(detailText(w.detail))}</span><span class="num" ${w.resetsAt ? `data-cd="${w.resetsAt}" data-fmt="reset"` : ""}>${resetText(w)}</span></div></div>`;
     }).join("")}</div></div>` : "";
     const rs = resetHTML(s);
     const rowsI = [];
@@ -533,9 +618,11 @@
     const Wv = window.innerWidth, Hv = window.innerHeight, bodyH = geo.bodyH;
     const sW = geo.w || BW * Z;
     const l = Math.max(0, Math.min(Wv - sW, d.left)), t = Math.max(0, Math.min(Hv - bodyH, d.top));
-    const distL = l, distR = Wv - (l + sW);
+    const distL = l, distR = Wv - (l + sW), distT = t;
     let dock;
-    if (Math.min(distL, distR) < 70) {
+    if (distT < 60 && distT < Math.min(distL, distR)) {
+      dock = { ...cfg.dock, mode: "edge", edge: "top", tx: Math.max(0, Math.min(1, (l + sW / 2) / Wv)) };
+    } else if (Math.min(distL, distR) < 70) {
       const tot = bodyH + 2 * F * Z;
       dock = { ...cfg.dock, mode: "edge", edge: distL < distR ? "left" : "right", y: Math.max(0, Math.min(1, (t - F * Z) / Math.max(1, Hv - tot))) };
     } else {
@@ -647,6 +734,21 @@
     if (!toasts.length) return;
     const sd = side();
     const Hv = window.innerHeight;
+    if (sd === "below") {
+      const Wv = window.innerWidth;
+      let y = geo.top + geo.bodyH + GAP * Z;
+      // 气泡 / 面板开着时排在它下面，不重叠
+      for (const o of [popId && pop, cardId && card]) if (o && o.offsetHeight) y = Math.max(y, o.getBoundingClientRect().bottom + 10 * Z);
+      toasts.forEach((t, i) => {
+        const ax = anchorX(t.ev.ai);
+        const x = Math.round(Math.max(8, Math.min(Wv - TOAST_W * Z - 8, ax - (TOAST_W * Z) / 2)));
+        Object.assign(t.el.style, { left: x + "px", top: Math.round(y) + "px", transform: Z === 1 ? "" : `scale(${Z})`, transformOrigin: "0 0" });
+        if (i === 0) tailUp(t.el, Math.max(26, Math.min(TOAST_W - 26, (ax - x) / Z)));
+        else { const tl = t.el.querySelector(":scope > .tail"); if (tl) tl.style.display = "none"; }
+        y += t.el.offsetHeight * Z + 8 * Z;
+      });
+      return;
+    }
     // 先按锚点排，再自上而下避让，避免多条重叠
     const items = toasts.map((t) => ({ t, h: t.el.offsetHeight * Z, ay: toastAnchor(t.ev.ai) })).sort((a, b) => a.ay - b.ay);
     let floor = 8;
@@ -665,6 +767,7 @@
       }
       const h0 = it.h / Z;
       const ty = Math.max(10, Math.min(h0 - 44, (it.ay - y) / Z - 17));
+      tail.style.display = ""; tail.style.transformOrigin = "";
       Object.assign(tail.style, sd === "left" ? { left: TOAST_W - 1 + "px", top: ty + "px", transform: "" } : { left: "-15px", top: ty + "px", transform: "scaleX(-1)" });
     }
   }
