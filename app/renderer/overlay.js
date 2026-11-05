@@ -155,22 +155,25 @@
   function layoutTop() {
     const Wv = window.innerWidth;
     const d = cfg.dock;
-    Z = clampZ(cfg.zoom);
     const n = scr.fullTop && scr.notch && cfg.notchSplit !== false ? scr.notch : null;
-    const gapEl = applyNotchGap(n);
-    const len = itemsEl.offsetWidth + HPAD * 2;   // 主体长度（不含两端内凹弧）
-    const th = itemsEl.offsetHeight + TPAD * 2;   // 厚度
-    Z = clampZ(cfg.zoom);
-    Z = Math.max(ZMIN, Math.min(Z, Wv / (len + 2 * F + 16)));
-    const w = len + 2 * F;
-    let left;
-    if (gapEl) {
-      // 让留空正对刘海：两侧图标对称，黑色和刘海连成一体
+    // 先按拖放的位置正常摆放
+    clearNotchGap();
+    const size = () => {
+      const len = itemsEl.offsetWidth + HPAD * 2; // 主体长度（不含两端内凹弧）
+      const th = itemsEl.offsetHeight + TPAD * 2; // 厚度
+      Z = Math.max(ZMIN, Math.min(clampZ(cfg.zoom), Wv / (len + 2 * F + 16)));
+      return { len, th, w: len + 2 * F };
+    };
+    let { len, th, w } = size();
+    const cx = (d.tx == null ? 0.5 : Math.max(0, Math.min(1, d.tx))) * Wv; // 记录的是中心位置
+    let left = Math.round(Math.max(0, Math.min(Wv - w * Z, cx - (w * Z) / 2)));
+    // 只有放在刘海区域（和刘海有重叠，图标可能被摄像头挡住）时才适配刘海：以刘海为中心、图标分在两侧；
+    // 放在别处就按原位置正常显示，不强行挪到刘海
+    if (n && left < n.x1 && left + w * Z > n.x0) {
+      const gapEl = applyNotchGap(n);
+      ({ len, th, w } = size());
       const gc = (F + HPAD + gapEl.offsetLeft + gapEl.offsetWidth / 2) * Z;
       left = Math.round((n.x0 + n.x1) / 2 - gc);
-    } else {
-      const cx = (d.tx == null ? 0.5 : Math.max(0, Math.min(1, d.tx))) * Wv; // 记录的是中心位置
-      left = Math.round(Math.max(0, Math.min(Wv - w * Z, cx - (w * Z) / 2)));
     }
     const top = 0;
     itemsEl.style.top = TPAD + "px";

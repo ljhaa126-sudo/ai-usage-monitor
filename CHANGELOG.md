@@ -1,5 +1,11 @@
 # 更新日志
 
+## 1.7.8
+
+- **刘海屏适配只在刘海区域生效**：贴顶部时先按拖放的位置摆放；只有和刘海有重叠（图标可能被摄像头挡住）时，
+  才以刘海为中心、图标分在两侧。放在刘海左边或右边就按原位置正常显示，不再强行挪到刘海。
+- **Notch layout only applies when the bar is placed over the notch**; elsewhere along the top it stays where you put it.
+
 ## 1.7.7
 
 - **macOS 贴顶部时放进菜单栏**：横向组件贴着屏幕最上沿（菜单栏里），不再停在菜单栏下方；层级高于菜单栏。
