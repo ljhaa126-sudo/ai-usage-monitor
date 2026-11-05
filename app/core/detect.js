@@ -23,6 +23,7 @@ const appSupport = (...p) => {
   return path.join(process.env.XDG_CONFIG_HOME || path.join(h, ".config"), ...p);
 };
 const localAppData = (...p) => path.join(process.env.LOCALAPPDATA || path.join(home(), "AppData", "Local"), ...p);
+const dshHome = () => process.env.DSH_HOME || path.join(home(), ".dsh");
 const macApp = (name) => process.platform === "darwin" && (exists(`/Applications/${name}.app`) || exists(path.join(home(), "Applications", `${name}.app`)));
 
 // ---------------- ① 各 AI 的本机痕迹 ----------------
@@ -36,6 +37,8 @@ const CATALOG = {
     [() => exists(path.join(process.env.CODEX_HOME || path.join(home(), ".codex"), "auth.json")), "Codex 登录"],
     [() => macApp("Codex") || macApp("ChatGPT") || exists(localAppData("Programs", "Codex")), "Codex / ChatGPT 桌面版"],
   ],
+  // DeepSeek Harness（dsh）：配置目录 $DSH_HOME，默认 ~/.dsh
+  deepseek: () => [[() => exists(dshHome()) || exists(path.join(home(), ".dsh-desktop")), "DeepSeek Harness"]],
   cursor: () => [[() => exists(appSupport("Cursor")) || exists(path.join(home(), ".cursor")) || macApp("Cursor"), "Cursor"]],
   gemini: () => [[() => exists(path.join(home(), ".gemini", "oauth_creds.json")), "Gemini CLI 登录"]],
   copilot: () => [[() => exists(path.join(home(), ".config", "github-copilot")) || exists(localAppData("github-copilot")), "Copilot 插件"]],
@@ -48,6 +51,16 @@ const CATALOG = {
 // ---------------- ③ 在本机配置里找 API Key ----------------
 const SHELL_FILES = [".zshrc", ".zprofile", ".zshenv", ".bashrc", ".bash_profile", ".profile", path.join(".config", "fish", "config.fish")];
 const KEYISH = /^(sk-[A-Za-z0-9._-]{16,}|[A-Za-z0-9]{24,}\.[A-Za-z0-9]{8,}|[A-Za-z0-9_-]{32,})$/; // Kimi: sk-…；智谱: xxxx.yyyy
+
+// 简单 YAML：顶层或缩进的「名字: 值」（如 dsh 的 .credentials.yaml：DEEPSEEK_API_KEY: sk-…）
+function parseYamlFlat(text) {
+  const env = {};
+  for (const line of String(text).split(/\r?\n/)) {
+    const m = /^\s*([A-Za-z_][\w.-]*)\s*:\s*["']?([^"'#\s]+)["']?\s*(#.*)?$/.exec(line);
+    if (m) env[m[1]] = m[2];
+  }
+  return env;
+}
 
 function parseShell(text) {
   const env = {};
@@ -200,6 +213,13 @@ function findApiKeys(env = process.env, opts = {}) {
   for (const f of [path.join(h, ".claude", "settings.json"), path.join(h, ".claude", "settings.local.json")]) {
     const j = readJ(f);
     if (j) groups.push(...groupsFromJSON(j, "Claude Code 设置"));
+  }
+  // DeepSeek Harness（dsh）：Key 在 $DSH_HOME/.credentials.yaml；第三方 Windows 桌面版 DSH Desktop 在 ~/.dsh-desktop/config.json
+  {
+    const t = readText(path.join(dshHome(), ".credentials.yaml"));
+    if (t) { groups.push(...groupsFromEnv(parseYamlFlat(t), "DeepSeek Harness")); deepseekFromText(t, "DeepSeek Harness", groups); }
+    const j = readJ(path.join(home(), ".dsh-desktop", "config.json"));
+    if (j && typeof j.apiKey === "string") groups.push({ base: "api.deepseek.com", key: j.apiKey, from: "DSH Desktop" });
   }
   // Continue、OpenCode、Aider、家目录 .env 等编程工具
   for (const [f, name] of [[".continue/config.json", "Continue"], [".continue/config.yaml", "Continue"], [".local/share/opencode/auth.json", "OpenCode"], [".config/opencode/opencode.json", "OpenCode"], [".aider.conf.yml", "Aider"], [".env", "~/.env"]]) {
@@ -410,4 +430,4 @@ class Detector extends EventEmitter {
   stop() { clearInterval(this.timer); for (const w of this.watchers) try { w.close(); } catch { /* ignore */ } }
 }
 
-module.exports = { Detector, findApiKeys, parseShell, groupsFromJSON, readClaudeDesktopSession, claudeCookiePaths, CATALOG };
+module.exports = { Detector, findApiKeys, parseShell, parseYamlFlat, groupsFromJSON, readClaudeDesktopSession, claudeCookiePaths, CATALOG };

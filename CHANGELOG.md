@@ -1,5 +1,11 @@
 # 更新日志
 
+## 1.7.5
+
+- **支持 DeepSeek Harness（dsh）**：自动读取 `$DSH_HOME`（默认 `~/.dsh`）里 `.credentials.yaml` 的 DeepSeek API Key，
+  以及第三方 Windows 桌面版 DSH Desktop 的 `~/.dsh-desktop/config.json`；装了 dsh 但读不到 Key 时显示「检测到」。
+- **DeepSeek Harness (dsh)** API keys are now detected automatically.
+
 ## 1.7.4
 
 - **修复 Copilot 误识别**：只是登录过 GitHub（VS Code 自带 Copilot）而自动开通、从没用过的免费版不再显示；

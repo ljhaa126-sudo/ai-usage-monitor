@@ -64,6 +64,23 @@ const K = (c) => "sk-" + c.repeat(32);
   assert.strictEqual(k.deepseek.from, "CherryStudio");
   ok("Cherry Studio 等桌面客户端（只认 DeepSeek 旁边的 Key，不会把 OpenAI 的 Key 认错）");
 
+  // DeepSeek Harness（dsh）
+  fs.rmSync(path.join(H, ".config", "CherryStudio"), { recursive: true });
+  put(".dsh/settings.yaml", "llm-pi-ai:\n  providers: {}\nagent-default-model: deepseek-v4-pro\n");
+  put(".dsh/.credentials.yaml", `# dsh credentials\nDEEPSEEK_API_KEY: "${K("f")}"\nFIREWORKS_API_KEY: fw_abcdefabcdefabcdefabcdef\n`);
+  k = D.findApiKeys({});
+  assert.strictEqual(k.deepseek.apiKeys[0], K("f")); // 配置文件里的排在客户端数据前面（客户端扫描结果有 10 分钟缓存）
+  assert.strictEqual(k.deepseek.from, "DeepSeek Harness");
+  const det = new D.Detector({ log: () => {} });
+  const f = await det.scan();
+  assert.ok(/DeepSeek Harness/.test(f.deepseek));
+  ok("DeepSeek Harness（~/.dsh/.credentials.yaml）");
+  fs.rmSync(path.join(H, ".dsh"), { recursive: true });
+  put(".dsh-desktop/config.json", JSON.stringify({ apiKey: K("9"), port: 3080 }));
+  k = D.findApiKeys({});
+  assert.strictEqual(k.deepseek.apiKey, K("9")); assert.strictEqual(k.deepseek.from, "DSH Desktop");
+  ok("DSH Desktop（Windows 桌面版）");
+
   // 多个候选：前两个已失效，第三个有效 → 用第三个
   let tried = [];
   http.setTransport(async (o) => {

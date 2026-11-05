@@ -33,7 +33,7 @@
     kimi: "在 kimi.com/code 控制台创建 API Key 后填入。",
     glm: "填写 GLM Coding Plan 的 API Key；z.ai 国际版请选「国际」。",
     boxai: "自动读取本机 Box 登录的 RTX 账号，查询本月个人 Token 额度（需连接公司内网 / iOA）。",
-    deepseek: "DeepSeek 开放平台按量付费，显示账户余额。会自动从环境变量 DEEPSEEK_API_KEY、shell 配置文件、Claude Code / cc-switch 里接入 DeepSeek 的配置找 API Key；找不到时在这里填。",
+    deepseek: "DeepSeek 开放平台按量付费，显示账户余额。会自动从 DeepSeek Harness（~/.dsh）、环境变量 DEEPSEEK_API_KEY、shell 配置文件、Claude Code / cc-switch / Continue / Cherry Studio 等配置里找 API Key；找不到时在这里填。",
     hunyuan: "腾讯云 TokenHub 的混元 Token Plan 额度。按腾讯云规定，额度只能用腾讯云 API 密钥查询（调用模型的 API Key 查不了）：会自动读取 tccli 和环境变量 TENCENTCLOUD_SECRET_ID / TENCENTCLOUD_SECRET_KEY；也可以在这里填「SecretId SecretKey」。建议用只读子账号的密钥（权限 QcloudTokenHubReadOnlyAccess）。",
     tokendash: "读取腾讯官方「用量健康助手」(Tencent Token Dashboard) 的本地登录态，显示全公司 AI Token 的本月用量（人民币）。需先安装并登录过那个助手；它的登录每隔约两小时自动续，半个月后需重新登录一次。",
     workbuddy: "腾讯员工是企业 SSO 账号，需在企业专属站点走 iOA 登录（手机号 / 微信登录的是另一个账号，查不到企业额度）。若登录窗口空白，说明 iOA 拦截了本程序访问内网，需要在 iOA 里给「AI Usage Monitor.exe」授信。",
