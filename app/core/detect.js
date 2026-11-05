@@ -79,23 +79,117 @@ function groupsFromEnv(env, from) {
 }
 
 // 在任意 JSON 里找配置条目：{ env: {...} }、{ baseUrl / base_url, apiKey / api_key }
-function groupsFromJSON(j, from, out = [], depth = 0) {
-  if (!j || typeof j !== "object" || depth > 8) return out;
-  if (Array.isArray(j)) { for (const x of j) groupsFromJSON(x, from, out, depth + 1); return out; }
+function groupsFromJSON(j, from, out = [], depth = 0, parentKey = "") {
+  if (!j || typeof j !== "object" || depth > 10) return out;
+  if (Array.isArray(j)) { for (const x of j) groupsFromJSON(x, from, out, depth + 1, parentKey); return out; }
   const flat = {};
   for (const [k, v] of Object.entries(j)) if (typeof v === "string") flat[k] = v;
   out.push(...groupsFromEnv(flat, from));
-  const base = flat.baseUrl || flat.base_url || flat.baseURL || flat.api_base || flat.endpoint || "";
-  const key = flat.apiKey || flat.api_key || flat.token || flat.key || "";
-  if (base && key) out.push({ base, key, from });
-  for (const v of Object.values(j)) if (v && typeof v === "object") groupsFromJSON(v, from, out, depth + 1);
+  const base = flat.baseUrl || flat.base_url || flat.baseURL || flat.apiBase || flat.api_base || flat.apiHost || flat.endpoint || flat.url || "";
+  const key = flat.apiKey || flat.api_key || flat.apikey || flat.token || flat.key || "";
+  // 没写地址时，用 provider / type / id / name 字段或上一级键名当提示（如 "deepseek"）
+  const hint = base || [flat.provider, flat.apiProvider, flat.type, flat.id, flat.name, parentKey].filter((x) => typeof x === "string" && /deepseek|kimi|moonshot|glm|zhipu|bigmodel|hunyuan/i.test(x))[0] || "";
+  if (hint && key) out.push({ base: hint, key, from });
+  for (const [k, v] of Object.entries(j)) if (v && typeof v === "object") groupsFromJSON(v, from, out, depth + 1, k);
+  // 有的客户端把配置存成 JSON 字符串
+  for (const v of Object.values(flat)) if (v.length > 20 && v.length < 2e5 && /^[[{]/.test(v.trim()) && /deepseek|kimi|moonshot|bigmodel|z\.ai|hunyuan/i.test(v)) { try { groupsFromJSON(JSON.parse(v), from, out, depth + 1); } catch { /* ignore */ } }
+  return out;
+}
+
+// 文本里按「DeepSeek Key 的格式（sk- + 32 位十六进制）+ 附近出现 deepseek」找（YAML / .env / 客户端本地数据）
+const DS_KEY = /sk-[0-9a-f]{32}(?![0-9a-zA-Z])/g;
+function deepseekFromText(text, from, out = []) {
+  const t = String(text);
+  if (!/deepseek/i.test(t)) return out;
+  let m;
+  DS_KEY.lastIndex = 0;
+  // 归属判断：Key 前面最近出现的服务商名字必须是 DeepSeek（中间没有别家），
+  // 前面找不到任何服务商名字时才看后面紧挨着的。避免把别家的 Key 发给 DeepSeek 去验证。
+  const PROV = /deepseek|openai|anthropic|claude|moonshot|kimi|zhipu|bigmodel|glm|gemini|google|groq|siliconflow|silicon|dashscope|qwen|aliyun|baichuan|minimax|doubao|volcengine|ark\.cn|hunyuan|tencent|mistral|openrouter|ollama|azure|grok|x\.ai|together|perplexity|cohere|stepfun|yi-|lingyi|spark|xfyun|ernie|baidu|wenxin|302\.ai|aihubmix|github|copilot/gi;
+  const nearest = (s, fromEnd) => {
+    let last = null, mm;
+    PROV.lastIndex = 0;
+    while ((mm = PROV.exec(s))) { last = mm; if (!fromEnd) break; }
+    return last ? last[0].toLowerCase() : "";
+  };
+  while ((m = DS_KEY.exec(t))) {
+    const before = nearest(t.slice(Math.max(0, m.index - 600), m.index), true);
+    const owner = before || nearest(t.slice(m.index + m[0].length, m.index + m[0].length + 200), false);
+    if (owner === "deepseek") out.push({ base: "api.deepseek.com", key: m[0], from });
+    if (out.length > 20) break;
+  }
+  return out;
+}
+
+// SQLite 数据库（新版 cc-switch 等）：把所有文本单元格拿出来按 JSON / 文本两种方式找
+function groupsFromSqlite(file, from) {
+  const out = [];
+  let DatabaseSync;
+  try { ({ DatabaseSync } = require("node:sqlite")); } catch { return out; }
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "aimon-db-"));
+  try {
+    const t = path.join(tmp, "x.db");
+    fs.copyFileSync(file, t);
+    for (const ext of ["-wal", "-shm"]) if (exists(file + ext)) { try { fs.copyFileSync(file + ext, t + ext); } catch { /* ignore */ } }
+    const d = new DatabaseSync(t, { readOnly: true });
+    try {
+      const tables = d.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => r.name).slice(0, 40);
+      for (const tb of tables) {
+        let rows = [];
+        try { rows = d.prepare(`SELECT * FROM "${String(tb).replace(/"/g, "")}" LIMIT 2000`).all(); } catch { continue; }
+        for (const r of rows) {
+          const cells = Object.values(r).filter((v) => typeof v === "string");
+          const row = {};
+          for (const [k, v] of Object.entries(r)) if (typeof v === "string") row[k] = v;
+          groupsFromJSON(row, from, out);
+          deepseekFromText(cells.join("\n"), from, out);
+        }
+      }
+    } finally { d.close(); }
+  } catch { /* ignore */ } finally { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ } }
+  return out;
+}
+
+// 桌面 AI 客户端（Cherry Studio、Chatbox、LobeHub…）的本地数据（Chromium LevelDB），只做文本匹配
+function scanClientStores(from, dirs, out = []) {
+  let budget = 120e6; // 最多读 120 MB
+  const walk = (d, depth) => {
+    if (depth > 4 || budget <= 0) return;
+    let ents = [];
+    try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) { if (!/^(Cache|Code Cache|GPUCache|blob_storage|Crashpad|logs?|Service Worker|DawnCache|ShaderCache)$/i.test(e.name)) walk(p, depth + 1); continue; }
+      if (!/\.(log|ldb|json|sqlite|db)$/i.test(e.name) && e.name !== "config") continue;
+      let sz = 0;
+      try { sz = fs.statSync(p).size; } catch { continue; }
+      if (!sz || sz > 30e6) continue;
+      budget -= sz;
+      try { deepseekFromText(fs.readFileSync(p).toString("latin1"), from, out); } catch { /* ignore */ }
+    }
+  };
+  for (const d of dirs) if (exists(d)) { const before = out.length; walk(d, 0); for (let i = before; i < out.length; i++) out[i].from = path.basename(d); }
   return out;
 }
 
 function readText(p) { try { const st = fs.statSync(p); if (st.size > 2e6) return ""; return fs.readFileSync(p, "utf8"); } catch { return ""; } }
 function readJ(p) { const t = readText(p); if (!t) return null; try { return JSON.parse(t); } catch { return null; } }
 
-function findApiKeys(env = process.env) {
+// 常见桌面 AI 客户端的数据目录
+const CLIENT_DIRS = () => ["CherryStudio", "Cherry Studio", "xyz.chatboxapp.app", "Chatbox", "chatbox", "LobeHub", "lobehub-desktop", "ChatWise", "AnythingLLM", "anythingllm-desktop", "Jan", "NextChat", "ChatGPT-Next-Web"].map((n) => appSupport(n));
+
+// 客户端数据较大：只在数据有变化、且距上次至少 10 分钟时重新扫描
+let clientCache = { sig: null, at: 0, keys: [] };
+function clientKeys() {
+  const dirs = CLIENT_DIRS().filter(exists);
+  const sig = dirs.map((d) => [d, mtime(d), mtime(path.join(d, "Local Storage", "leveldb")), mtime(path.join(d, "IndexedDB"))].join(":")).join("|");
+  if (clientCache.sig === sig) return clientCache.keys;
+  if (clientCache.sig !== null && Date.now() - clientCache.at < 10 * 60e3) return clientCache.keys;
+  clientCache = { sig, at: Date.now(), keys: dirs.length ? scanClientStores("AI 客户端", dirs) : [] };
+  return clientCache.keys;
+}
+
+function findApiKeys(env = process.env, opts = {}) {
   const h = home();
   const groups = [...groupsFromEnv(env, "环境变量")];
   for (const f of SHELL_FILES) {
@@ -107,13 +201,23 @@ function findApiKeys(env = process.env) {
     const j = readJ(f);
     if (j) groups.push(...groupsFromJSON(j, "Claude Code 设置"));
   }
+  // Continue、OpenCode、Aider、家目录 .env 等编程工具
+  for (const [f, name] of [[".continue/config.json", "Continue"], [".continue/config.yaml", "Continue"], [".local/share/opencode/auth.json", "OpenCode"], [".config/opencode/opencode.json", "OpenCode"], [".aider.conf.yml", "Aider"], [".env", "~/.env"]]) {
+    const p = path.join(h, f);
+    const t = readText(p);
+    if (!t) continue;
+    if (/\.json$/.test(f)) { try { groupsFromJSON(JSON.parse(t), name, groups); } catch { /* ignore */ } }
+    if (f === ".env") groups.push(...groupsFromEnv(parseShell(t), name));
+    deepseekFromText(t, name, groups);
+  }
   // cc-switch / Claude Code Router / Kimi CLI 等配置工具
   for (const [dir, name] of [[".cc-switch", "cc-switch"], [".claude-code-router", "Claude Code Router"], [".kimi", "Kimi CLI"], [".config/kimi", "Kimi CLI"]]) {
     const d = path.join(h, dir);
     let files = [];
-    try { files = fs.readdirSync(d).filter((n) => /\.(json|toml)$/i.test(n)).slice(0, 20); } catch { continue; }
+    try { files = fs.readdirSync(d).filter((n) => /\.(json|toml|db|sqlite)$/i.test(n)).slice(0, 20); } catch { continue; }
     for (const n of files) {
       const p = path.join(d, n);
+      if (/\.(db|sqlite)$/i.test(n)) { groups.push(...groupsFromSqlite(p, name)); continue; } // 新版 cc-switch 用 SQLite
       if (/\.json$/i.test(n)) { const j = readJ(p); if (j) groups.push(...groupsFromJSON(j, name)); }
       else {
         // TOML：同一段里的 base_url / api_key
@@ -142,8 +246,10 @@ function findApiKeys(env = process.env) {
   if (kimi) out.kimi = { apiKey: kimi.key, from: kimi.from };
   const glm = ok.find((g) => /bigmodel|zhipu|z\.ai/.test(g.b));
   if (glm) out.glm = { apiKey: glm.key, region: /z\.ai/.test(glm.b) ? "global" : "cn", from: glm.from };
-  const ds = ok.find((g) => /deepseek/.test(g.b));
-  if (ds) out.deepseek = { apiKey: ds.key, from: ds.from };
+  if (opts.clients !== false) clientKeys().forEach((g) => ok.push({ ...g, b: "api.deepseek.com" }));
+  // DeepSeek：可能找到好几个（旧 Key、多个客户端）。全部交给数据源逐个验证，先用配置文件里的
+  const dss = [...new Map(ok.filter((g) => /deepseek/.test(g.b)).map((g) => [g.key, g])).values()];
+  if (dss.length) out.deepseek = { apiKey: dss[0].key, apiKeys: dss.map((g) => g.key), from: dss[0].from };
   const tc = ok.find((g) => g.b === "tencentcloud");
   if (tc) out.hunyuan = { apiKey: tc.key, from: tc.from };
   // 只有调用混元模型的 Key（查不了额度）：记为「检测到」，提示补充腾讯云 API 密钥

@@ -203,7 +203,7 @@ class Engine extends EventEmitter {
     const pc0 = this.provCfg(id);
     // 没有手动填 Key：用自动识别到的（环境变量 / Claude Code 设置 / cc-switch 等）
     const auto = !String(pc0.apiKey || "").trim() && this.ctx.autoCfg ? this.ctx.autoCfg(id) : null;
-    const pc = auto ? { ...pc0, apiKey: auto.apiKey, ...(auto.region ? { region: auto.region } : {}) } : pc0;
+    const pc = auto ? { ...pc0, apiKey: auto.apiKey, apiKeys: auto.apiKeys || [], ...(auto.region ? { region: auto.region } : {}) } : pc0;
     s.inflight = true;
     s.lastAt = Date.now();
     const prev = this.status[id];

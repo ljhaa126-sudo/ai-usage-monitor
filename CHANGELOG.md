@@ -1,5 +1,14 @@
 # 更新日志
 
+## 1.7.4
+
+- **修复 Copilot 误识别**：只是登录过 GitHub（VS Code 自带 Copilot）而自动开通、从没用过的免费版不再显示；
+  套餐里没有的额度（额度为 0）不再显示成「已用 100%」；GitHub CLI 的令牌只在本机确实装了 Copilot 时才用。
+- **DeepSeek 识别范围扩大**：除环境变量 / shell 配置 / Claude Code / cc-switch 外，还会读取
+  Continue、OpenCode、Aider、家目录 .env、新版 cc-switch 数据库，以及 Cherry Studio、Chatbox、LobeHub 等桌面客户端里保存的 DeepSeek Key。
+  只认 DeepSeek 名下的 Key（不会把别家的 Key 发给 DeepSeek）；找到多个时逐个验证，用有效的那个。
+- **Fix**: unused auto-enabled Copilot Free no longer shows as 100%; DeepSeek keys are found in many more tools and clients.
+
 ## 1.7.3
 
 - **竖条图标新增内圈**：外圈是当前会话（5 小时）用量，内圈是本周 / 总用量，颜色同样按用量从绿到红。

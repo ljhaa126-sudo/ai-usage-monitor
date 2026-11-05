@@ -498,7 +498,8 @@ function copilotDiskToken() {
     if (!j) continue;
     for (const [k, v] of Object.entries(j)) if (k.startsWith("github.com") && v && v.oauth_token) return v.oauth_token;
   }
-  // GitHub CLI（gh auth login）保存在文件里的令牌
+  // GitHub CLI（gh auth login）保存在文件里的令牌：只有本机装过 Copilot 时才用
+  if (!copilotInstalled()) return "";
   const gh = [path.join(home(), ".config", "gh", "hosts.yml")];
   if (process.env.APPDATA) gh.unshift(path.join(process.env.APPDATA, "GitHub CLI", "hosts.yml"));
   for (const f of gh) {
@@ -508,6 +509,15 @@ function copilotDiskToken() {
     if (m) return m[1];
   }
   return "";
+}
+
+function copilotInstalled() {
+  const dirs = [path.join(home(), ".config", "github-copilot"), path.join(process.env.LOCALAPPDATA || "", "github-copilot")];
+  if (dirs.some((d) => d && fs.existsSync(d))) return true;
+  for (const ext of [".vscode", ".cursor", ".windsurf"].map((x) => path.join(home(), x, "extensions"))) {
+    try { if (fs.readdirSync(ext).some((n) => /^github\.copilot/i.test(n))) return true; } catch { /* ignore */ }
+  }
+  return false;
 }
 
 async function fetchCopilot(cfg) {
@@ -532,11 +542,18 @@ async function fetchCopilot(cfg) {
     const pr = num(m, "percent_remaining");
     if (pr == null) return null;
     const ent = num(m, "entitlement") || 0, rem = num(m, "remaining") || 0;
+    // 额度为 0 = 套餐里根本没有这一项（例如免费版没有高级请求），不是「用完了」
+    if (!ent) return null;
     return W("month", label, 100 - pr, reset, 0, ent ? `已用 ${Math.round(ent - rem)} / ${Math.round(ent)}` : "");
   };
   st.secondary = mk("premium_interactions", "高级请求 · 本月");
   st.extra = [mk("chat", "Chat · 本月"), mk("completions", "代码补全 · 本月")].filter(Boolean);
   if (!st.secondary && st.extra.length) st.secondary = st.extra.shift();
+  // 只是登录过 GitHub、自动带上的免费版，而且一次都没用过：当作没有使用 Copilot，不显示
+  const all = [st.secondary, ...st.extra].filter(Boolean);
+  const free = /free|limited/i.test(String(d.copilot_plan || "") + " " + String(d.access_type_sku || ""));
+  if (!cfg.apiKey && free && all.every((w) => !w.usedPercent)) throw new NoLogin("这个 GitHub 账号只有自动开通的 Copilot 免费版，而且还没有使用过");
+  if (!all.length) throw new NoLogin("这个 GitHub 账号没有 Copilot 额度");
   return st;
 }
 
@@ -616,13 +633,19 @@ async function fetchGLM(cfg) {
 // ======================= DeepSeek =======================
 // 官方余额接口：GET https://api.deepseek.com/user/balance（Bearer API Key）
 // DeepSeek 是按量付费，没有「额度百分比」，显示账户余额；余额用完时圆环显示为满（红色）。
+let deepseekGood = "";
 async function fetchDeepSeek(cfg) {
   const st = { historyUnit: "峰值 %" };
-  const key = (cfg.apiKey || "").trim() || process.env.DEEPSEEK_API_KEY;
-  if (!key) throw new NoLogin("没有找到 DeepSeek 的 API Key（会自动从环境变量、Claude Code / cc-switch 配置里找）");
-  let d;
-  try { d = await requestJSON({ url: "https://api.deepseek.com/user/balance", headers: { Authorization: "Bearer " + key } }); }
-  catch (e) { if (e.auth) throw new NoLogin("DeepSeek API Key 无效"); throw e; }
+  // 自动识别可能找到好几个 Key（旧的、不同客户端里的）：逐个试，用第一个有效的，并记住
+  const keys = [...new Set([(cfg.apiKey || "").trim(), ...(cfg.apiKeys || []), process.env.DEEPSEEK_API_KEY].filter(Boolean))];
+  if (deepseekGood && keys.includes(deepseekGood)) keys.unshift(...keys.splice(keys.indexOf(deepseekGood), 1));
+  if (!keys.length) throw new NoLogin("没有找到 DeepSeek 的 API Key（会自动从环境变量、Claude Code / cc-switch / Continue / Cherry Studio 等配置里找）");
+  let d = null;
+  for (const key of keys.slice(0, 8)) {
+    try { d = await requestJSON({ url: "https://api.deepseek.com/user/balance", headers: { Authorization: "Bearer " + key } }); deepseekGood = key; break; }
+    catch (e) { if (!e.auth) throw e; }
+  }
+  if (!d) throw new NoLogin(keys.length > 1 ? `找到 ${keys.length} 个 DeepSeek API Key，但都无效（可能已删除或过期）` : "DeepSeek API Key 无效");
   const infos = Array.isArray(d.balance_infos) ? d.balance_infos : [];
   const b = infos.find((x) => x.currency === "CNY") || infos[0];
   if (!b) throw new Error("DeepSeek 返回了无法识别的余额格式");
