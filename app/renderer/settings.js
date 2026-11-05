@@ -138,6 +138,7 @@
       <div class="grp">
         <div class="row"><div class="lab">展示样式<small>极简：悬停图标弹出小气泡；详细：点击图标展开完整面板</small></div>${seg("style", cfg.style, [["minimal", "极简"], ["detail", "详细"]])}</div>
         <div class="row"><div class="lab">位置<small>也可以直接拖动竖条：靠近左右边缘松手会吸附，拖到屏幕顶部会变成横向，拖到中间就自由悬浮</small></div>${seg("pos", pos, [["right", "贴右侧"], ["left", "贴左侧"], ["top", "贴顶部（横向）"], ["float", "自由摆放"]])}</div>
+        ${MAC ? `<div class="row"><div class="lab">刘海屏适配<small>贴顶部时竖条放进菜单栏；有刘海的 MacBook 上图标分在刘海两侧，和刘海连成一体</small></div>${sw(cfg.notchSplit !== false, 'data-b="notchSplit"')}</div>` : ""}
         <div class="row"><div class="lab">显示方式<small>圆环、百分比和进度条显示已经用掉的，还是还剩多少；颜色始终按已用量变化，快用完时仍会变红</small></div>${seg("valueMode", cfg.valueMode === "remain" ? "remain" : "used", [["used", "已用"], ["remain", "剩余"]])}</div>
         <div class="row"><div class="lab">只显示进度<small>竖条上只显示圆环，不显示百分比和金额；气泡里只显示进度条和重置时间</small></div>${sw(!!cfg.hideNumbers, 'data-b="hideNumbers"')}</div>
         <div class="row"><div class="lab">显示内圈（本周 / 总用量）<small>外圈是当前会话（5 小时）用量，内圈是本周 / 总用量；只有同时有这两种额度的 AI（如 Claude、Codex）才显示内圈</small></div>${sw(cfg.innerRing !== false, 'data-b="innerRing"')}</div>

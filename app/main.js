@@ -49,10 +49,33 @@ function targetDisplay() {
   return all.find((d) => d.id === store.cfg.dock.displayId) || screen.getPrimaryDisplay();
 }
 
+// macOS 贴顶部：悬浮层盖住整块屏幕（包括菜单栏），层级高于菜单栏，竖条贴着屏幕最上沿（菜单栏里），刘海屏时绕着刘海排布
+const macTop = () => process.platform === "darwin" && store.cfg.dock.mode === "edge" && store.cfg.dock.edge === "top";
+const overlayRect = (d) => (macTop() ? d.bounds : d.workArea);
+let macScreens = [];
+function screenInfo() {
+  if (process.env.AIMON_SCREEN) { try { return JSON.parse(process.env.AIMON_SCREEN); } catch { /* ignore */ } } // 测试用：模拟刘海
+  const d = targetDisplay();
+  const { notchFor } = require("./core/notch");
+  return { notch: process.platform === "darwin" ? notchFor(d, macScreens) : null, menuBar: d.workArea.y - d.bounds.y, fullTop: macTop() };
+}
+function sendScreenInfo() { if (overlay && !overlay.isDestroyed()) overlay.webContents.send("screen", screenInfo()); }
+async function refreshScreens() {
+  if (process.platform !== "darwin") return;
+  try { macScreens = await require("./core/notch").readScreens(); } catch { macScreens = []; }
+  const n = screenInfo().notch;
+  log(`[screen] ${n ? `刘海 ${Math.round(n.x0)}–${Math.round(n.x1)}，高 ${Math.round(n.h)}` : "没有刘海"}`);
+  sendScreenInfo();
+}
+function applyLevel() {
+  if (!overlay || overlay.isDestroyed()) return;
+  if (process.platform === "darwin") overlay.setAlwaysOnTop(true, macTop() ? "status" : "floating"); // status 层级高于菜单栏
+}
+
 function createOverlay() {
   const d = targetDisplay();
   overlay = new BrowserWindow({
-    ...d.workArea,
+    ...overlayRect(d),
     transparent: true,
     backgroundColor: "#00000000",
     frame: false,
@@ -73,6 +96,7 @@ function createOverlay() {
   });
   // 注意：Windows 上 "floating" 这一档会被 Electron 放到任务栏「后面」，容易被其他置顶窗口盖住；Windows 用最高的 "screen-saver"
   overlay.setAlwaysOnTop(true, process.platform === "win32" ? "screen-saver" : "floating");
+  applyLevel();
   if (process.platform === "darwin") overlay.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
   overlay.setIgnoreMouseEvents(true, { forward: true });
   overlay.loadFile(path.join(__dirname, "renderer", "overlay.html"));
@@ -138,9 +162,11 @@ function startKeepOnTop() {
 function fitOverlay() {
   if (!overlay || overlay.isDestroyed()) return;
   const d = targetDisplay();
-  overlay.setBounds(d.workArea);
+  applyLevel();
+  overlay.setBounds(overlayRect(d));
   keepOnTop();
   overlay.webContents.send("config", store.cfg);
+  sendScreenInfo();
 }
 
 async function shot() {
@@ -392,6 +418,7 @@ function updateCfg(patch) {
   if (patch.autoStart !== undefined && process.platform !== "linux") app.setLoginItemSettings({ openAtLogin: !!store.cfg.autoStart, openAsHidden: true });
   if (patch.proxy !== undefined) applyProxy();
   if (patch.hotkey !== undefined) registerHotkey();
+  if (patch.dock !== undefined) fitOverlay(); // 贴顶部（macOS）时悬浮层要盖住菜单栏
   if (structural || patch.refreshSeconds || patch.smartRefresh !== undefined || patch.proxy !== undefined) engine.resetSchedule();
   if (before !== JSON.stringify(store.cfg)) { sendConfig(); refreshTrayMenu(); broadcast(); }
 }
@@ -436,6 +463,7 @@ function ipc() {
   ipcMain.handle("open-settings", () => openSettings());
   ipcMain.handle("save-config", (_e, patch) => updateCfg(patch));
   ipcMain.handle("hotkey", () => hotkey);
+  ipcMain.handle("screen-info", () => screenInfo());
   ipcMain.handle("detected", () => (detector ? detector.found : {}));
   // 设置里录制新快捷键时先暂停全局快捷键，否则按下当前组合会被它截走
   ipcMain.handle("hotkey-pause", (_e, on) => { if (on) { hotkeyPaused = true; try { globalShortcut.unregisterAll(); } catch { /* ignore */ } } else registerHotkey(); });
@@ -458,6 +486,7 @@ function ipc() {
     } else {
       store.cfg.dock = { ...dock, displayId: cur.id };
       store.saveCfg();
+      fitOverlay();
     }
     refreshTrayMenu();
     return store.cfg.dock;
@@ -729,9 +758,10 @@ app.whenReady().then(async () => {
     powerMonitor.on("unlock-screen", () => { paused = false; engine.resume(); setTimeout(keepOnTop, 800); });
   }
 
-  screen.on("display-removed", fitOverlay);
-  screen.on("display-added", () => { fitOverlay(); refreshTrayMenu(); });
-  screen.on("display-metrics-changed", fitOverlay);
+  screen.on("display-removed", () => { fitOverlay(); refreshScreens(); });
+  screen.on("display-added", () => { fitOverlay(); refreshTrayMenu(); refreshScreens(); });
+  screen.on("display-metrics-changed", () => { fitOverlay(); refreshScreens(); });
+  refreshScreens();
 });
 
 app.on("second-instance", () => { if (overlay) { overlay.showInactive(); keepOnTop(); } openSettings(); });

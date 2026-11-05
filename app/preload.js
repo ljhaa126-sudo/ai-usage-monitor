@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld("aimon", {
   openSettings: () => ipcRenderer.invoke("open-settings"),
   saveConfig: (patch) => ipcRenderer.invoke("save-config", patch),
   hotkey: () => ipcRenderer.invoke("hotkey"),
+  screenInfo: () => ipcRenderer.invoke("screen-info"),
+  onScreen: (fn) => ipcRenderer.on("screen", (_e, s) => fn(s)),
   detected: () => ipcRenderer.invoke("detected"),
   onDetected: (fn) => ipcRenderer.on("detected", (_e, f) => fn(f)),
   hotkeyPause: (on) => ipcRenderer.invoke("hotkey-pause", on),

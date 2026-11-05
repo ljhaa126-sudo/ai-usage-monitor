@@ -134,16 +134,44 @@
   // 贴顶部时横向排列
   const HPAD = 22, TPAD = 9; // 横向：两端内边距、上下内边距
   const isTop = () => !!cfg && cfg.dock.mode === "edge" && cfg.dock.edge === "top" && !(drag && drag.moved);
+  // 屏幕信息（主进程）：刘海位置、是否盖住菜单栏
+  let scr = { notch: null, menuBar: 0, fullTop: false };
+  function clearNotchGap() { for (const x of itemsEl.querySelectorAll(":scope > .ngap, :scope > .ghost")) x.remove(); }
+  // 刘海屏：图标平分在刘海两侧，中间留出刘海的宽度；两边数量不等时补一个看不见的占位，保持对称
+  function applyNotchGap(n) {
+    clearNotchGap();
+    if (!n) return null;
+    const items = [...itemsEl.querySelectorAll(":scope > .item")];
+    if (!items.length) return null;
+    const k = Math.ceil(items.length / 2);
+    const gap = document.createElement("div");
+    gap.className = "ngap";
+    gap.style.width = Math.round((n.x1 - n.x0 + 18) / Z) + "px";
+    gap.style.flex = "none";
+    itemsEl.insertBefore(gap, items[k] || null);
+    if (items.length % 2) { const g = document.createElement("div"); g.className = "item ghost"; itemsEl.appendChild(g); }
+    return gap;
+  }
   function layoutTop() {
     const Wv = window.innerWidth;
     const d = cfg.dock;
+    Z = clampZ(cfg.zoom);
+    const n = scr.fullTop && scr.notch && cfg.notchSplit !== false ? scr.notch : null;
+    const gapEl = applyNotchGap(n);
     const len = itemsEl.offsetWidth + HPAD * 2;   // 主体长度（不含两端内凹弧）
     const th = itemsEl.offsetHeight + TPAD * 2;   // 厚度
     Z = clampZ(cfg.zoom);
     Z = Math.max(ZMIN, Math.min(Z, Wv / (len + 2 * F + 16)));
     const w = len + 2 * F;
-    const cx = (d.tx == null ? 0.5 : Math.max(0, Math.min(1, d.tx))) * Wv; // 记录的是中心位置
-    const left = Math.round(Math.max(0, Math.min(Wv - w * Z, cx - (w * Z) / 2)));
+    let left;
+    if (gapEl) {
+      // 让留空正对刘海：两侧图标对称，黑色和刘海连成一体
+      const gc = (F + HPAD + gapEl.offsetLeft + gapEl.offsetWidth / 2) * Z;
+      left = Math.round((n.x0 + n.x1) / 2 - gc);
+    } else {
+      const cx = (d.tx == null ? 0.5 : Math.max(0, Math.min(1, d.tx))) * Wv; // 记录的是中心位置
+      left = Math.round(Math.max(0, Math.min(Wv - w * Z, cx - (w * Z) / 2)));
+    }
     const top = 0;
     itemsEl.style.top = TPAD + "px";
     itemsEl.style.left = F + HPAD + "px";
@@ -167,6 +195,7 @@
     bar.classList.toggle("h", isTop());
     bar.classList.toggle("nonum", !!cfg.hideNumbers);
     if (isTop()) return layoutTop();
+    clearNotchGap();
     itemsEl.style.left = "";
     shapeSvg.style.transformOrigin = "";
     const Wv = window.innerWidth, Hv = window.innerHeight;
@@ -690,6 +719,8 @@
   }
 
   api.onUpdate(onList);
+  api.screenInfo().then((s) => { scr = s || scr; layout(); }).catch(() => {});
+  api.onScreen((s) => { scr = s || scr; layout(); });
   api.onConfig((c) => { cfg = c; if (cfg.style !== "detail" && cardId) closeCard(); if (cfg.style === "detail") hidePop(true); renderBar(); });
   api.state().then((s) => { cfg = s.cfg; onList(s.list); });
 

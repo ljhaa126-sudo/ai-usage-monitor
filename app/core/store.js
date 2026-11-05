@@ -30,7 +30,8 @@ function defaults() {
     taskNotify: true, // AI 任务完成 / 需要处理时，在对应图标旁弹出提醒
     valueMode: "used", // 显示「已用」还是「剩余」
     hideNumbers: false, // 只显示进度圈 / 进度条，不显示数字
-    innerRing: true, // 竖条图标显示内圈（本周 / 总用量）；外圈是当前会话用量
+    innerRing: true,
+    notchSplit: true, // macOS 刘海屏贴顶部时，图标分在刘海两侧 // 竖条图标显示内圈（本周 / 总用量）；外圈是当前会话用量
     hotkey: "", // 显示 / 隐藏悬浮条的快捷键（Electron 写法）。"" = 默认，"off" = 不使用
   };
 }

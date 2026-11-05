@@ -42,6 +42,8 @@ svg { display: block; overflow: visible; }
 /* 顶部横向 */
 .bar.h .items { flex-direction: row; width: auto; height: auto; align-items: flex-start; gap: calc(var(--gap, 20px) * .55); }
 .bar.h .item { width: 60px; gap: 4px; padding: 2px 0; }
+.item.ghost { visibility: hidden; pointer-events: none; }
+.ngap { pointer-events: none; }
 /* 只显示进度：不显示数字，图标更紧凑 */
 .bar.nonum .item .pct { display: none; }
 .bar.nonum .item { gap: 0; padding: 2px 0; }
