@@ -61,6 +61,7 @@ jobs:
           node test/replay.test.js "$PWD/app"
           node test/detect2.test.js "$PWD/app"
           node test/notch.test.js "$PWD/app"
+          node test/stuck.test.js "$PWD/app"
 
       - name: 构建 Mac（arm64 + x64）和 Windows（x64）
         if: steps.ver.outputs.skip != '1'

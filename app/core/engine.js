@@ -208,7 +208,10 @@ class Engine extends EventEmitter {
     s.lastAt = Date.now();
     const prev = this.status[id];
     let st, err;
-    try { st = await fetchFn(pc, this.ctx); } catch (e) { err = e; }
+    // 单次刷新最多等 60 秒：网络卡住时不会一直「正在更新」、也不会让这个 AI 从此不再刷新
+    let timer;
+    const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error("请求超时（60 秒没有响应）")), this.fetchTimeout || 60000); });
+    try { st = await Promise.race([fetchFn(pc, this.ctx), timeout]); } catch (e) { err = e; } finally { clearTimeout(timer); }
     s.inflight = false;
     if (!this.provCfg(id).enabled) return;
     if (!this.status[id]) this.status[id] = this.base(d, "loading");
@@ -238,7 +241,8 @@ class Engine extends EventEmitter {
       const hasData = prev && (prev.primary || prev.secondary || (prev.extra || []).length);
       if (hasData) {
         // 有旧数据：偶发失败不打扰，继续显示；连续失败 3 次或数据过旧才提示
-        out = { ...prev, lagging: true };
+        // 记下失败原因（气泡底部显示），并且不再显示成「正在更新…」
+        out = { ...prev, lagging: true, fromCache: false, lastError: shortErr(err), lastErrorFull: String(err.message || "") };
         const old = Date.now() - (prev.updatedAt || 0) > Math.max(3 * interval, 5 * 60000);
         if (s.fails >= 3 || old) {
           out.state = "stale";
@@ -267,6 +271,8 @@ class Engine extends EventEmitter {
       delete out.daily;
       out.lagging = false;
       out.fromCache = false;
+      delete out.lastError;
+      delete out.lastErrorFull;
       if (st && st.dashboard) out.dashboard = st.dashboard;
     }
     this.status[id] = out;

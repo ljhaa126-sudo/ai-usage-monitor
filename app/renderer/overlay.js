@@ -334,7 +334,12 @@
       h += `<div class="rs-mini"><span>可用重置 <b class="rs-n ${n ? "on" : ""}">${n}</b> 次</span>${n ? rsBtn(s, first ? first.id : "", "立即重置") : ""}</div>${m}`;
     }
     if (s.state === "stale" || s.state === "error") h += `<div class="foot"><span style="color:#ff8a80">${esc(s.message)}</span></div>`;
-    else if (s.lagging || s.fromCache) h += `<div class="foot"><span data-ago="${s.updatedAt}">${ago(s.updatedAt)}</span><span>${s.fromCache ? "正在更新…" : "稍后自动重试"}</span></div>`;
+    else if (s.lagging || s.fromCache) {
+      // 刷新失败时写清楚原因，而不是一直显示「正在更新…」
+      const cf = /Cloudflare|登录网页版/.test(s.lastErrorFull || "");
+      const why = s.fromCache ? "正在更新…" : cf ? "被 Cloudflare 拦截 · 去设置里登录网页版" : s.lastError ? `更新失败（${s.lastError.length > 16 ? s.lastError.slice(0, 16) + "…" : s.lastError}）· 稍后重试` : "稍后自动重试";
+      h += `<div class="foot"><span data-ago="${s.updatedAt}">${ago(s.updatedAt)}</span><span style="${s.fromCache ? "" : "color:#FF9F0A"}" title="${esc(s.lastErrorFull || "")}">${esc(why)}</span></div>`;
+    }
     return h;
   }
 
