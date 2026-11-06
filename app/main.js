@@ -732,7 +732,7 @@ app.whenReady().then(async () => {
     setTimeout(() => { const w = loginWins.workbuddy; log(`[diag-login] ${process.env.AIMON_DIAG_LOGIN} -> ${w && !w.isDestroyed() ? w.webContents.getURL().split("?")[0] : "closed"}`); app.exit(0); }, 12000);
     return;
   }
-  engine = MOCK ? mockEngine() : new Engine(store, { webSession, isOnline: () => net.isOnline(), log, autoCfg: (id) => (detector ? detector.autoCfg(id) : null) }, log);
+  engine = MOCK ? mockEngine() : new Engine(store, { webSession, isOnline: () => net.isOnline(), log, dataDir: store.dir || process.env.AIMON_DATA || app.getPath("userData"), autoCfg: (id) => (detector ? detector.autoCfg(id) : null) }, log);
   engine.on("update", broadcast);
   if (!MOCK) engine.on("update", checkConnected);
   ipc();

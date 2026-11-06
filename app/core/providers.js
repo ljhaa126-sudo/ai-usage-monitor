@@ -135,6 +135,26 @@ let codexApiAt = 0;
 // GET  /wham/rate-limit-reset-credits               → 每一次重置的标题 / 到期时间
 // POST /wham/rate-limit-reset-credits/consume       → 使用一次重置
 let codexResets = null; // { available, credits: [...], at }
+// 每次重置的详情（类型、到期时间）保存到本机：连不上 ChatGPT 时也能逐条显示上次读到的
+function resetCacheFile() { return codexCtx && codexCtx.dataDir ? path.join(codexCtx.dataDir, "codex-resets.json") : ""; }
+function loadResetCache() {
+  const f = resetCacheFile();
+  const j = f ? readJSON(f) : null;
+  if (!j || !Array.isArray(j.credits)) return null;
+  const credits = j.credits.filter((c) => !c.expiresAt || c.expiresAt > Date.now()); // 去掉已过期的
+  return { available: Math.min(j.available || credits.length, credits.length), credits, at: j.at || 0, cached: true };
+}
+function saveResetCache(r, force) {
+  const f = resetCacheFile();
+  if (!f || !r || (!force && !(r.credits || []).length)) return;
+  try { fs.writeFileSync(f, JSON.stringify({ available: r.available, credits: r.credits, at: r.at })); } catch { /* ignore */ }
+}
+// 线上给了次数但没拿到详情：用本机保存的详情补上（按次数截取）
+function withCachedCredits(r) {
+  if (!r || (r.credits || []).length || !r.available) return r;
+  const c = loadResetCache();
+  return c && c.credits.length ? { ...r, credits: c.credits.slice(0, r.available), cached: true } : r;
+}
 
 // ---------- 请求 chatgpt.com：三种方式，记住能用的那个 ----------
 // chatgpt.com 前面有 Cloudflare。「Chrome 网络栈 + codex_cli_rs 的 User-Agent」这种不一致的组合会被当成机器人，
@@ -261,6 +281,7 @@ async function fetchCodex(cfg, ctx) {
   st.history = loc.series;
   st.daily = loc.daily;
   if (codexResets) st.resets = codexResets;
+  else { const c = loadResetCache(); if (c && c.credits.length) st.resets = c; }
   const auth = readJSON(path.join(codexHome(), "auth.json")) || {};
   const tk = auth.tokens || {};
   let token = (cfg.apiKey || "").trim() || tk.access_token;
@@ -280,7 +301,9 @@ async function fetchCodex(cfg, ctx) {
   // 用量只取线上接口（账号级数据）：两台电脑都用的话，本机会话日志只记得本机最后一次的额度，会不准。
   // 本机日志只用来画「本机」趋势图，以及触发「刚用过，马上刷新一次」。
   if (Date.now() < codexBlockedUntil && !(await codexWebToken().catch(() => null))) {
-    throw new Error(CF_NOTE); // 刚被 Cloudflare 拦过：15 分钟内不再撞墙（显示上次的线上数据）
+    const err = new Error(CF_NOTE); // 刚被 Cloudflare 拦过：15 分钟内不再撞墙（显示上次的线上数据）
+    const c = loadResetCache(); if (c && c.credits.length) err.patch = { resets: c };
+    throw err;
   }
   if (!token) throw new NoLogin("没有检测到 Codex 登录。运行 codex 并用 ChatGPT 账号登录，或在设置 → Codex 点「登录网页版」。");
   let d;
@@ -294,9 +317,10 @@ async function fetchCodex(cfg, ctx) {
       try { d = await codexReq("https://chatgpt.com/backend-api/wham/usage", cauth); st.account = w.email || st.account; } catch (e2) { e = e2; }
     }
     if (!d) {
-      if (e.cfBlocked) { codexBlockedUntil = Date.now() + 15 * 60000; codexLog("[codex] 在线接口被 Cloudflare 拦截，15 分钟后再试"); throw new Error(CF_NOTE); }
+      const keep = (err) => { const c = loadResetCache(); if (c && c.credits.length) err.patch = { resets: c }; return err; };
+      if (e.cfBlocked) { codexBlockedUntil = Date.now() + 15 * 60000; codexLog("[codex] 在线接口被 Cloudflare 拦截，15 分钟后再试"); throw keep(new Error(CF_NOTE)); }
       if (e.auth) throw new NoLogin("这台电脑上的 Codex 登录已过期：运行一次 codex 即可刷新，或在设置 → Codex 点「登录网页版」");
-      throw e;
+      throw keep(e);
     }
   }
   codexApiAt = Date.now();
@@ -306,7 +330,14 @@ async function fetchCodex(cfg, ctx) {
   if (rc && num(rc, "available_count") != null) {
     const n = num(rc, "available_count");
     // 次数变化或缓存超过 10 分钟才重新拉详情
-    if (!codexResets || codexResets.available !== n || Date.now() - codexResets.at > 10 * 60000) codexResets = n > 0 ? await codexResetDetails(cauth, n) : { available: 0, credits: [], at: Date.now() };
+    // 次数变了、超过 10 分钟、或上次没拿到详情：重新读详情；读到就存到本机，读不到用本机保存的
+    const stale = !codexResets || codexResets.available !== n || Date.now() - codexResets.at > 10 * 60000 || (n > 0 && !(codexResets.credits || []).length) || codexResets.cached;
+    if (stale) {
+      codexResets = n > 0 ? await codexResetDetails(cauth, n) : { available: 0, credits: [], at: Date.now() };
+      if ((codexResets.credits || []).length) saveResetCache(codexResets);
+      else if (n === 0) saveResetCache({ available: 0, credits: [], at: Date.now() }, true); // 用完了：清空本机保存的
+      codexResets = withCachedCredits(codexResets);
+    }
     st.resets = codexResets;
   }
   if (d.plan_type) st.plan = titleCase(d.plan_type);

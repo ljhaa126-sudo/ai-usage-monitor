@@ -13,4 +13,5 @@ node test/replay.test.js "$PWD/app"
 node test/detect2.test.js "$PWD/app"
 node test/notch.test.js "$PWD/app"
 node test/stuck.test.js "$PWD/app"
+node test/resets.test.js "$PWD/app"
 if python3 -c "import playwright" 2>/dev/null; then python3 test/overlay.test.py; else echo "（跳过界面测试：未安装 playwright）"; fi

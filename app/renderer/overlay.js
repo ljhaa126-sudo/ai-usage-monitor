@@ -334,7 +334,7 @@
       const cs = n > 0 ? (s.resets.credits || []).slice(0, n) : [];
       if (cs.length) {
         // 每次重置单独一行：标题 + 到期时间 + 各自的按钮（按到期时间先后排列）
-        h += `<div class="rs-mini rs-head"><span>可用重置 <b class="rs-n on">${n}</b> 次</span></div>`;
+        h += `<div class="rs-mini rs-head"><span>可用重置 <b class="rs-n on">${n}</b> 次</span>${s.resets.cached ? `<span style="font-size:11px;color:rgba(235,235,245,.4)">上次读取</span>` : ""}</div>`;
         h += cs.map((c) => `<div class="rs-row"><div class="rs-t"><div class="n">${esc(c.title || "限额重置")}</div><div class="sub">${esc(expText(c.expiresAt) || (c.grantedAt ? "获得于 " + new Date(c.grantedAt).toLocaleDateString() : ""))}</div></div>${rsBtn(s, c.id, "立即重置")}</div>`).join("") + m;
       } else {
         h += `<div class="rs-mini"><span>可用重置 <b class="rs-n ${n ? "on" : ""}">${n}</b> 次</span>${n ? rsBtn(s, first ? first.id : "", "立即重置") : ""}</div>${m}`;

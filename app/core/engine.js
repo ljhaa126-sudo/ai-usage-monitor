@@ -243,6 +243,8 @@ class Engine extends EventEmitter {
         // 有旧数据：偶发失败不打扰，继续显示；连续失败 3 次或数据过旧才提示
         // 记下失败原因（气泡底部显示），并且不再显示成「正在更新…」
         out = { ...prev, lagging: true, fromCache: false, lastError: shortErr(err), lastErrorFull: String(err.message || "") };
+        // 数据源在失败时也能给出部分可靠信息（如本机保存的 Codex 重置详情）：补上旧数据里缺的部分
+        if (err.patch && err.patch.resets && !((prev.resets || {}).credits || []).length) out.resets = err.patch.resets;
         const old = Date.now() - (prev.updatedAt || 0) > Math.max(3 * interval, 5 * 60000);
         if (s.fails >= 3 || old) {
           out.state = "stale";
