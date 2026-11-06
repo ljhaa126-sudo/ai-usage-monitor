@@ -179,27 +179,47 @@ const ok = (name) => { pass++; console.log("  ✓ " + name); };
   assert.deepStrictEqual(seen, ["web"]);
   ok("下次直接用上次成功的方式");
 
+  // 两台电脑：本机日志停在 33%（另一台电脑后来又用了），线上是账号的真实用量 70%
   ({ http, prov } = load());
-  const sd = path.join(tmp, "sessions", "2026", "11", "04"); fs.mkdirSync(sd, { recursive: true });
-  const ts = new Date(Date.now() - 10 * 60000).toISOString();
-  fs.writeFileSync(path.join(sd, "rollout-x.jsonl"), JSON.stringify({ timestamp: ts, type: "event_msg", payload: { type: "token_count", info: null, rate_limits: { primary: { used_percent: 33, window_minutes: 300, resets_in_seconds: 5000 }, secondary: { used_percent: 55, window_minutes: 10080, resets_in_seconds: 90000 } } } }) + "\n");
-  seen = [];
-  http.setTransport(async (o) => { seen.push(1); return html403; });
+  const sd = path.join(tmp, "sessions", "2026", "11", "06"); fs.mkdirSync(sd, { recursive: true });
+  fs.writeFileSync(path.join(sd, "rollout-x.jsonl"), JSON.stringify({ timestamp: new Date(Date.now() - 30e3).toISOString(), type: "event_msg", payload: { type: "token_count", info: null, rate_limits: { primary: { used_percent: 33, window_minutes: 300, resets_in_seconds: 5000 }, secondary: { used_percent: 55, window_minutes: 10080, resets_in_seconds: 90000 } } } }) + "\n");
+  const usage70 = { ...usage, rate_limit: { ...usage.rate_limit, primary_window: { ...usage.rate_limit.primary_window, used_percent: 70 } } };
+  http.setTransport(async () => ({ status: 200, headers: {}, text: JSON.stringify(usage70) }));
   st = await prov.FETCHERS.codex({}, {});
+  assert.strictEqual(st.primary.usedPercent, 70);
+  assert.strictEqual(st.source, "ChatGPT 在线接口");
+  ok("两台电脑都在用：始终取线上账号用量（70%），不用本机日志里的旧数值（33%）");
+
+  // 全部被 Cloudflare 拦：报错（界面会显示上次的线上数据），不再拿本机日志顶替
+  ({ http, prov } = load());
+  seen = [];
+  http.setTransport(async () => { seen.push(1); return html403; });
+  await assert.rejects(prov.FETCHERS.codex({}, {}), /Cloudflare/);
   assert.strictEqual(seen.length, 3);
-  assert.ok(st.primary && st.primary.pct != null || st.primary, "有本地数据");
-  assert.ok(/Cloudflare/.test(st.message));
-  ok("三种都被拦 → 用本地会话日志正常显示，不报错");
+  ok("线上被拦 → 提示并显示上次的线上数据，不用本机日志");
   seen = [];
-  st = await prov.FETCHERS.codex({}, {});
+  await assert.rejects(prov.FETCHERS.codex({}, {}), /Cloudflare/);
   assert.strictEqual(seen.length, 0);
   ok("被拦后 15 分钟内不再撞墙");
 
+  // 这台电脑上 Codex 的登录过期了，但登录过网页版 → 用网页登录查
   ({ http, prov } = load());
-  fs.rmSync(path.join(tmp, "sessions"), { recursive: true });
-  http.setTransport(async () => html403);
-  await assert.rejects(prov.FETCHERS.codex({}, {}), /登录网页版/);
-  ok("没有本地数据时提示「登录网页版」");
+  const ws = { cookies: { get: async (q) => (q.name || "").includes("session-token") || !q.name ? [{ name: "__Secure-next-auth.session-token", value: "x" }] : [] } };
+  http.setTransport(async (o) => {
+    if (o.url.includes("/api/auth/session")) return { status: 200, headers: {}, text: JSON.stringify({ accessToken: "webtok", account: { id: "acc2" }, user: { email: "me@x.com" } }) };
+    if ((o.headers.Authorization || "") === "Bearer tok") return { status: 401, headers: {}, text: '{"detail":"token expired"}' };
+    return { status: 200, headers: {}, text: JSON.stringify(usage70) };
+  });
+  st = await prov.FETCHERS.codex({}, { webSession: ws });
+  assert.strictEqual(st.primary.usedPercent, 70);
+  assert.strictEqual(st.source, "ChatGPT 在线接口（网页登录）");
+  ok("这台电脑上 Codex 登录过期 → 自动改用网页登录查线上用量");
+
+  // 过期且没有网页登录 → 提示怎么恢复
+  ({ http, prov } = load());
+  http.setTransport(async () => ({ status: 401, headers: {}, text: '{"detail":"token expired"}' }));
+  await assert.rejects(prov.FETCHERS.codex({}, {}), (e) => e.noLogin && /登录已过期/.test(e.message));
+  ok("过期且没有网页登录 → 提示运行 codex 或登录网页版");
 
   console.log(`\n全部通过：${pass} 项`);
 })().catch((e) => { console.error("✗", e); process.exit(1); });

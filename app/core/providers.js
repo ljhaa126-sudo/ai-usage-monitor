@@ -118,16 +118,6 @@ function codexWin(m, key, label) {
   return fixLabel(w);
 }
 
-function codexLocalWin(m, ts, key, label) {
-  if (!m || num(m, "used_percent") == null) return null;
-  const w = W(key, label, num(m, "used_percent"), parseTime(m.resets_at), num(m, "window_minutes") || 0);
-  if (!w.resetsAt && num(m, "resets_in_seconds") != null) w.resetsAt = ts + num(m, "resets_in_seconds") * 1000;
-  if (w.resetsAt && w.resetsAt < Date.now()) {
-    w.usedPercent = 0; // 快照已过重置点
-    if (w.windowMinutes) while (w.resetsAt < Date.now()) w.resetsAt += w.windowMinutes * 60000;
-  }
-  return fixLabel(w);
-}
 
 function fixLabel(w) {
   const m = w.windowMinutes;
@@ -286,83 +276,59 @@ async function fetchCodex(cfg, ctx) {
     if (a.chatgpt_plan_type) st.plan = titleCase(a.chatgpt_plan_type);
     if (a.chatgpt_subscription_active_until) st.planEndsAt = parseTime(a.chatgpt_subscription_active_until);
   }
-  let apiErr = null;
-  const localFresh = loc.rate && loc.rateTs > Date.now() - 120000;
-  // 在线接口被 Cloudflare 拦着的这段时间：直接用本地会话日志（Codex 每次对话都会写，同样是实时的）
-  const blocked = Date.now() < codexBlockedUntil;
-  if ((localFresh && Date.now() - codexApiAt < 5 * 60000) || (blocked && loc.rate)) {
-    st.source = localFresh ? "本地会话（实时）" : codexLocalSource(loc.rateTs);
-    st.primary = codexLocalWin(loc.rate.primary, loc.rateTs, "5h", "当前会话");
-    st.secondary = codexLocalWin(loc.rate.secondary, loc.rateTs, "week", "所有模型 · 本周");
-    if (blocked) st.message = CF_NOTE;
-    if (st.primary || st.secondary) return st;
+  // 用量只取线上接口（账号级数据）：两台电脑都用的话，本机会话日志只记得本机最后一次的额度，会不准。
+  // 本机日志只用来画「本机」趋势图，以及触发「刚用过，马上刷新一次」。
+  if (Date.now() < codexBlockedUntil && !(await codexWebToken().catch(() => null))) {
+    throw new Error(CF_NOTE); // 刚被 Cloudflare 拦过：15 分钟内不再撞墙（显示上次的线上数据）
   }
-  if (token) {
-    try {
-      const d = await codexReq("https://chatgpt.com/backend-api/wham/usage", cauth);
-      codexApiAt = Date.now();
-      codexBlockedUntil = 0;
-      st.source = "ChatGPT 在线接口";
-      const rc = d.rate_limit_reset_credits;
-      if (rc && num(rc, "available_count") != null) {
-        const n = num(rc, "available_count");
-        // 次数变化或缓存超过 10 分钟才重新拉详情
-        if (!codexResets || codexResets.available !== n || Date.now() - codexResets.at > 10 * 60000) codexResets = n > 0 ? await codexResetDetails(cauth, n) : { available: 0, credits: [], at: Date.now() };
-        st.resets = codexResets;
-      }
-      if (d.plan_type) st.plan = titleCase(d.plan_type);
-      if (d.email) st.account = d.email;
-      const rl = d.rate_limit || {};
-      st.primary = codexWin(rl.primary_window, "5h", "当前会话");
-      st.secondary = codexWin(rl.secondary_window, "week", "所有模型 · 本周");
-      st.extra = [];
-      for (const x of d.additional_rate_limits || []) {
-        const n = x.limit_name || x.metered_feature || "其他";
-        const r2 = x.rate_limit || {};
-        const a = codexWin(r2.primary_window, "5h", n + " · 5 小时");
-        const b = codexWin(r2.secondary_window, "week", n + " · 本周");
-        if (a) st.extra.push(a);
-        if (b) st.extra.push(b);
-      }
-      const cr = d.credits || {};
-      if (cr.unlimited) st.credits = "无限额度";
-      else if (cr.balance && cr.balance !== "0") st.credits = "余额 " + cr.balance + " credits";
-      // 本地会话日志比在线接口更新得更快（每次对话立即写入），取较新的那个
-      if (loc.rate && loc.rateTs > Date.now() - 20000) {
-        const p = codexLocalWin(loc.rate.primary, loc.rateTs, "5h", "当前会话");
-        const s = codexLocalWin(loc.rate.secondary, loc.rateTs, "week", "所有模型 · 本周");
-        if (p) st.primary = p;
-        if (s) st.secondary = s;
-        st.source = "本地会话（实时）";
-      }
-      return st;
-    } catch (e) {
-      apiErr = e;
-      // 三种方式都被 Cloudflare 拦：15 分钟内不再撞，期间用本地数据
-      if (e.cfBlocked) { codexBlockedUntil = Date.now() + 15 * 60000; codexLog("[codex] 在线接口被 Cloudflare 拦截，15 分钟内改用本地会话日志"); }
+  if (!token) throw new NoLogin("没有检测到 Codex 登录。运行 codex 并用 ChatGPT 账号登录，或在设置 → Codex 点「登录网页版」。");
+  let d;
+  try {
+    d = await codexReq("https://chatgpt.com/backend-api/wham/usage", cauth);
+  } catch (e) {
+    // 这台电脑上 Codex 的登录过期了（很久没在这台电脑上用 Codex）：改用网页登录再试一次
+    const w = e.auth ? await codexWebToken().catch(() => null) : null;
+    if (w && w.token !== token) {
+      Object.assign(cauth, { token: w.token, accountId: w.accountId });
+      try { d = await codexReq("https://chatgpt.com/backend-api/wham/usage", cauth); st.account = w.email || st.account; } catch (e2) { e = e2; }
+    }
+    if (!d) {
+      if (e.cfBlocked) { codexBlockedUntil = Date.now() + 15 * 60000; codexLog("[codex] 在线接口被 Cloudflare 拦截，15 分钟后再试"); throw new Error(CF_NOTE); }
+      if (e.auth) throw new NoLogin("这台电脑上的 Codex 登录已过期：运行一次 codex 即可刷新，或在设置 → Codex 点「登录网页版」");
+      throw e;
     }
   }
-  if (loc.rate) {
-    st.source = codexLocalSource(loc.rateTs);
-    st.primary = codexLocalWin(loc.rate.primary, loc.rateTs, "5h", "当前会话");
-    st.secondary = codexLocalWin(loc.rate.secondary, loc.rateTs, "week", "所有模型 · 本周");
-    if (st.primary || st.secondary) {
-      // 有本地数据就正常显示，不算出错；只在详细面板里给一句说明
-      if (apiErr) st.message = apiErr.cfBlocked ? CF_NOTE : "在线接口暂时连不上，正在使用本地会话日志（会自动重试）";
-      return st;
-    }
+  codexApiAt = Date.now();
+  codexBlockedUntil = 0;
+  st.source = cauth.token === token ? "ChatGPT 在线接口" : "ChatGPT 在线接口（网页登录）";
+  const rc = d.rate_limit_reset_credits;
+  if (rc && num(rc, "available_count") != null) {
+    const n = num(rc, "available_count");
+    // 次数变化或缓存超过 10 分钟才重新拉详情
+    if (!codexResets || codexResets.available !== n || Date.now() - codexResets.at > 10 * 60000) codexResets = n > 0 ? await codexResetDetails(cauth, n) : { available: 0, credits: [], at: Date.now() };
+    st.resets = codexResets;
   }
-  if (apiErr && apiErr.cfBlocked) throw new Error("chatgpt.com 拦截了请求（Cloudflare 验证）。请在设置 → Codex 点「登录网页版」，在弹出的窗口里登录并通过一次验证；用一次 Codex 后也会自动从本地日志读到用量。");
-  if (!token) throw new NoLogin("没有检测到 Codex 登录（~/.codex/auth.json）。运行 codex 并用 ChatGPT 账号登录即可。");
-  if (apiErr && apiErr.auth) throw new NoLogin("Codex 登录已过期：运行一次 codex 即可刷新");
-  throw apiErr;
+  if (d.plan_type) st.plan = titleCase(d.plan_type);
+  if (d.email) st.account = d.email;
+  const rl = d.rate_limit || {};
+  st.primary = codexWin(rl.primary_window, "5h", "当前会话");
+  st.secondary = codexWin(rl.secondary_window, "week", "所有模型 · 本周");
+  st.extra = [];
+  for (const x of d.additional_rate_limits || []) {
+    const n = x.limit_name || x.metered_feature || "其他";
+    const r2 = x.rate_limit || {};
+    const a = codexWin(r2.primary_window, "5h", n + " · 5 小时");
+    const b = codexWin(r2.secondary_window, "week", n + " · 本周");
+    if (a) st.extra.push(a);
+    if (b) st.extra.push(b);
+  }
+  const cr = d.credits || {};
+  if (cr.unlimited) st.credits = "无限额度";
+  else if (cr.balance && cr.balance !== "0") st.credits = "余额 " + cr.balance + " credits";
+  return st;
 }
 
-function codexLocalSource(ts) {
-  const t = new Date(ts);
-  return `本地会话日志（${t.getMonth() + 1}-${t.getDate()} ${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}）`;
-}
-const CF_NOTE = "ChatGPT 在线接口被 Cloudflare 拦截，正在使用本地会话日志（每次用 Codex 都会自动更新）。想恢复在线数据：设置 → Codex →「登录网页版」，通过一次验证即可。";
+const CF_NOTE = "ChatGPT 在线接口被 Cloudflare 拦截，暂时显示上次的线上数据。恢复方法：设置 → Codex →「登录网页版」，通过一次验证即可（会自动重试）。";
 
 // ======================= Cursor =======================
 async function fetchCursor(cfg, ctx) {

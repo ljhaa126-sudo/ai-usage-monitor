@@ -402,7 +402,7 @@
     });
     svg += "</svg>";
     const total = h.reduce((a, d) => a + d.value, 0);
-    return `<div><div class="hdr"><span>近 7 天</span><span>${tok ? `合计 ${total >= 10 ? Math.round(total) : total.toFixed(1)}M tokens` : "每日最高使用率"}</span></div><div class="grp pd">${svg}</div></div>`;
+    return `<div><div class="hdr"><span>${tok ? "近 7 天 · 本机" : "近 7 天"}</span><span>${tok ? `合计 ${total >= 10 ? Math.round(total) : total.toFixed(1)}M tokens` : "每日最高使用率"}</span></div><div class="grp pd">${svg}</div></div>`;
   }
 
   // ---------------- 限额重置（参考官方「使用限额重置」面板） ----------------
