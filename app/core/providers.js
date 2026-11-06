@@ -170,7 +170,8 @@ async function codexReq(url, auth, extra = {}) {
   for (const way of order) {
     const o = codexWayOpts(way, auth);
     try {
-      const d = await requestJSON({ url, ...o, ...extra, headers: { ...o.headers, ...(extra.headers || {}) } });
+      // 每种方式最多等 12 秒（三种都试完也在 40 秒内，不会被整体的 60 秒上限截断）
+      const d = await requestJSON({ timeout: 12000, url, ...o, ...extra, headers: { ...o.headers, ...(extra.headers || {}) } });
       if (codexWay !== way) codexLog(`[codex] 在线接口改用「${way}」方式成功`);
       codexWay = way;
       return d;
