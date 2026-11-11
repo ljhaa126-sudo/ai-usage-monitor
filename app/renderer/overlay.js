@@ -322,10 +322,9 @@
         continue;
       }
       const sv = Math.max(0, Math.min(100, shown(v)));
-      const nums = !(cfg && cfg.hideNumbers); // 「只显示进度」时不写数字
       h += `<div class="sec"><div class="l"><span>${esc(w.label)}</span><span class="num" ${unl || !w.resetsAt ? "" : `data-cd="${w.resetsAt}" data-fmt="reset"`}>${unl || !w.resetsAt ? "" : resetText(w)}</span></div>
         <div class="track"><div class="fill" style="width:${unl ? (remainMode() ? 100 : 0) : Math.max(sv > 0 ? 2 : 0, sv)}%;background:${color(v)}"></div></div>
-        ${nums ? `<div class="u num">${unl ? "不限量" : `${verb()} ${Math.round(sv)}%`}${w.detail && !unl ? `<span style="color:rgba(235,235,245,.45)"> · ${esc(detailText(w.detail))}</span>` : ""}</div>` : ""}</div>`;
+        <div class="u num">${unl ? "不限量" : `${verb()} ${Math.round(sv)}%`}${w.detail && !unl ? `<span style="color:rgba(235,235,245,.45)"> · ${esc(detailText(w.detail))}</span>` : ""}</div></div>`;
     }
     if (s.resets) {
       const n = s.resets.available || 0;
@@ -335,7 +334,7 @@
       if (cs.length) {
         // 每次重置单独一行：标题 + 到期时间 + 各自的按钮（按到期时间先后排列）
         h += `<div class="rs-mini rs-head"><span>可用重置 <b class="rs-n on">${n}</b> 次</span>${s.resets.cached ? `<span style="font-size:11px;color:rgba(235,235,245,.4)">上次读取</span>` : ""}</div>`;
-        h += cs.map((c) => `<div class="rs-row"><div class="rs-t"><div class="n">${esc(c.title || "限额重置")}</div><div class="sub">${esc(expText(c.expiresAt) || (c.grantedAt ? "获得于 " + new Date(c.grantedAt).toLocaleDateString() : ""))}</div></div>${rsBtn(s, c.id, "立即重置")}</div>`).join("") + m;
+        h += cs.map((c) => `<div class="rs-row"><div class="rs-t"><div class="n">${esc(c.title || "限额重置")}</div><div class="sub">${esc(expText(c.expiresAt) || (c.grantedAt ? "获得于 " + new Date(c.grantedAt).toLocaleDateString() : "没有到期时间"))}</div></div>${c.locked ? lockBtn(c) : rsBtn(s, c.id, "立即重置")}</div>`).join("") + m;
       } else {
         h += `<div class="rs-mini"><span>可用重置 <b class="rs-n ${n ? "on" : ""}">${n}</b> 次</span>${n ? rsBtn(s, first ? first.id : "", "立即重置") : ""}</div>${m}`;
       }
@@ -439,6 +438,9 @@
     return `<span class="rbtn" data-act="reset" data-cid="${esc(cid || "")}">${label || "使用重置额度"}</span>`;
   }
 
+  // 暂时不能用的重置（例如「用满后才能用」「冷却中」）：灰色标签，不给按钮
+  function lockBtn(c) { return `<span class="rbtn busy">${esc(c.locked)}</span>`; }
+
   function resetHTML(s) {
     const r = s.resets;
     if (!r) return "";
@@ -448,13 +450,13 @@
     if (n > 0) {
       const cs = (r.credits || []).slice(0, Math.max(n, 1));
       items = cs.length
-        ? cs.map((c) => `<div class="row rs-item"><div class="rs-t"><div class="n">${esc(c.title || "限额重置")}</div><div class="sub">${esc(expText(c.expiresAt))}</div></div>${rsBtn(s, c.id)}</div>`).join("")
+        ? cs.map((c) => `<div class="row rs-item"><div class="rs-t"><div class="n">${esc(c.title || "限额重置")}</div><div class="sub">${esc(expText(c.expiresAt) || "没有到期时间")}</div></div>${c.locked ? lockBtn(c) : rsBtn(s, c.id)}</div>`).join("")
         : `<div class="row rs-item"><div class="rs-t"><div class="n">限额重置 × ${n}</div><div class="sub">由服务端自动选择最早到期的一次</div></div>${rsBtn(s, "")}</div>`;
     } else {
       items = `<div class="row rs-item"><div class="rs-t"><div class="sub">暂无可用的重置次数</div></div></div>`;
     }
     return `<div><div class="hdr"><span>使用限额重置</span><span>可用 <b class="rs-n ${n ? "on" : ""}">${n}</b> 次</span></div>
-      <div class="grp"><div class="row rs-intro">使用一次重置，即可恢复 5 小时限额、每周限额，或同时恢复两者</div>${items}</div>${msg}</div>`;
+      <div class="grp"><div class="row rs-intro">${s.id === "claude" ? "Claude 不定期赠送的免费重置：按类型恢复 5 小时限额或每周限额，过期作废" : "使用一次重置，即可恢复 5 小时限额、每周限额，或同时恢复两者"}${r.cached ? "（上次读取）" : ""}</div>${items}</div>${msg}</div>`;
   }
 
   function rerender() {
@@ -864,5 +866,5 @@
   api.getPulses().then((p) => { pulses = p || {}; renderBar(); }).catch(() => {});
 
   // 截图测试用
-  window.__test = { showPop: (id) => { pinned = id; showPop(id); }, openCard, hidePop, closeCard, toast: showToast, pulse: (p) => { pulses = p || {}; renderBar(); } };
+  window.__test = { cfg: (c) => { cfg = { ...cfg, ...c }; renderBar(); }, showPop: (id) => { pinned = id; showPop(id); }, openCard, hidePop, closeCard, toast: showToast, pulse: (p) => { pulses = p || {}; renderBar(); } };
 })();

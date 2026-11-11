@@ -231,4 +231,4 @@ async function requestJSON(opts) {
   }
 }
 
-module.exports = { requestJSON, setTransport, CHROME_UA, nodeProxiedTransport, pickProxy };
+module.exports = { requestJSON, setTransport, CHROME_UA, nodeProxiedTransport, pickProxy, resolveProxyFor };

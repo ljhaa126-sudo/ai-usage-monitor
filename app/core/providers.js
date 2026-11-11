@@ -1,7 +1,8 @@
 "use strict";
 const fs = require("fs");
 const path = require("path");
-const { requestJSON, CHROME_UA } = require("./http");
+const { requestJSON, CHROME_UA, pickProxy, resolveProxyFor } = require("./http");
+const codexCli = require("./codexcli");
 const { home, readJSON, parseTime, num, clamp, titleCase, jwtClaims, NoLogin, appSupport } = require("./util");
 const { claudeLocal, codexLocal, claudeDirs, codexHome } = require("./locallogs");
 const { claudeCodeOAuth, cursorToken } = require("./secrets");
@@ -64,12 +65,23 @@ async function claudeWeb(st, ctx, cookieHeader, src) {
   const m = /(\d+)x/.exec(org.rate_limit_tier || "");
   if (m) st.plan += " " + m[1] + "x";
   if (org.name) st.account = String(org.name).replace(/['’]s Organization$/, "");
-  const d = await requestJSON({ ...base, url: `https://claude.ai/api/organizations/${org.uuid}/usage` });
+  claudeAuth = { kind: "web", org: org.uuid, cookieHeader, ctx };
+  const d = await claudeUsage("web", (q) => requestJSON({ ...base, url: `https://claude.ai/api/organizations/${org.uuid}/usage${q}` }));
   st.source = src;
   claudeParse(st, d);
+  claudeApplyResets(st, d, ctx);
 }
 
 async function fetchClaude(cfg, ctx) {
+  try { return await fetchClaudeInner(cfg, ctx); } catch (e) {
+    // 读取失败时，带上本机保存的重置详情（没有旧数据时也能显示）
+    const c = readResetFile(claudeResetFile(ctx));
+    if (c && c.credits.length && !(e instanceof NoLogin)) e.patch = { resets: c };
+    throw e;
+  }
+}
+
+async function fetchClaudeInner(cfg, ctx) {
   const st = { historyUnit: "M tokens" };
   const loc = claudeLocal();
   st.history = loc.series;
@@ -79,7 +91,7 @@ async function fetchClaude(cfg, ctx) {
   if (manual) {
     const sk = SK_RE.exec(manual);
     if (sk) { await claudeWeb(st, ctx, "sessionKey=" + sk[0], "手动填写的 sessionKey"); return st; }
-    await claudeOAuth(st, manual, "手动填写的 Token");
+    await claudeOAuth(st, manual, "手动填写的 Token", ctx);
     return st;
   }
 
@@ -88,7 +100,7 @@ async function fetchClaude(cfg, ctx) {
   if (oa) {
     const m = /(\d+)x/.exec(oa.rateLimitTier || "");
     st.plan = (titleCase(oa.subscriptionType || "") + (m ? " " + m[1] + "x" : "")).trim();
-    try { await claudeOAuth(st, oa.accessToken, "Claude Code 登录"); return st; } catch (e) { oauthErr = e; }
+    try { await claudeOAuth(st, oa.accessToken, "Claude Code 登录", ctx); return st; } catch (e) { oauthErr = e; }
   }
 
   if (ctx.webSession) {
@@ -99,15 +111,135 @@ async function fetchClaude(cfg, ctx) {
   throw new NoLogin("还没有连接 Claude。打开 设置 → Claude → 「登录 Claude 网页版」，登录一次即可；装了 Claude Code 的会自动识别。");
 }
 
-async function claudeOAuth(st, token, src) {
+async function claudeOAuth(st, token, src, ctx) {
   try {
-    const d = await requestJSON({ url: "https://api.anthropic.com/api/oauth/usage", headers: { Authorization: "Bearer " + token, "anthropic-beta": "oauth-2025-04-20", "User-Agent": "claude-code/2.1.0", "Content-Type": "application/json" } });
+    const headers = { Authorization: "Bearer " + token, "anthropic-beta": "oauth-2025-04-20", "User-Agent": claudeUA(), "Content-Type": "application/json" };
+    claudeAuth = { kind: "oauth", token, headers, ctx };
+    const d = await claudeUsage("oauth", (q) => requestJSON({ url: "https://api.anthropic.com/api/oauth/usage" + q, headers }));
     st.source = src;
     claudeParse(st, d);
+    claudeApplyResets(st, d, ctx);
   } catch (e) {
     if (e.auth) throw new NoLogin("Claude Code 的登录已过期：运行一次 claude 即可自动刷新");
     throw e;
   }
+}
+
+// ---------- Claude 限额重置（claude.ai 设置 → 用量 →「限额重置 / 免费重置」） ----------
+// 用量接口带上 cedar_ember=1 时，会多返回一个 cedar_ember 对象，里面的 grants 就是账号持有的重置：
+//   { id, label, type: session|weekly|full, resets_left, ends_at, usable_now, use_requires_limit, paused, unavailable_reason }
+// 这个接口只认 Claude Code 的 User-Agent（claude-cli/<版本> (external, cli)），版本太旧会回 ineligible。
+// 使用：POST /api/organizations/<org>/reset_rate_limits  { program: "cedar_ember", grant_id, request_id }
+let claudeAuth = null;            // 最近一次成功的登录方式，给「立即重置」复用
+const claudeEmberOff = {};        // 带 cedar_ember 参数请求失败时，1 小时内不再带
+let claudeVer = { v: "", at: 0 };
+
+// 本机 Claude Code 的版本（接口要求版本不能太旧）；读不到就用一个较新的版本号
+function claudeCliVersion() {
+  if (claudeVer.v && Date.now() - claudeVer.at < 6 * 3600000) return claudeVer.v;
+  const cmp = (a, b) => { const x = a.split(".").map(Number), y = b.split(".").map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0); return 0; };
+  const vs = [];
+  for (const d of [path.join(home(), ".local", "share", "claude", "versions"), path.join(appSupport(), "Claude", "claude-code")]) {
+    try { for (const n of fs.readdirSync(d)) if (/^\d+\.\d+\.\d+$/.test(n)) vs.push(n); } catch { /* 没有 */ }
+  }
+  for (const f of [path.join(home(), ".claude.json"), ...claudeDirs().map((d) => path.join(d, ".claude.json"))]) {
+    const j = readJSON(f);
+    for (const k of ["lastReleaseNotesSeen", "lastOnboardingVersion"]) if (j && /^\d+\.\d+\.\d+$/.test(j[k] || "")) vs.push(j[k]);
+  }
+  const best = vs.sort(cmp).pop();
+  claudeVer = { v: best && cmp(best, "2.1.322") > 0 ? best : "2.1.322", at: Date.now() };
+  return claudeVer.v;
+}
+const claudeUA = () => `claude-cli/${claudeCliVersion()} (external, cli)`;
+
+// 先带 cedar_ember=1 读；接口不认这个参数（4xx）就退回普通读法
+async function claudeUsage(kind, get) {
+  if (Date.now() < (claudeEmberOff[kind] || 0)) return get("");
+  try { return await get("?cedar_ember=1"); } catch (e) {
+    if (e.auth || e.html || !e.status || e.status === 429 || e.status >= 500) throw e;
+    claudeEmberOff[kind] = Date.now() + 3600000;
+    return get("");
+  }
+}
+
+function claudeResetTitle(g) {
+  if (g.type === "session") return "5 小时限额重置";
+  if (g.type === "weekly") return /fable/i.test(g.label || "") ? "Fable 每周限额重置" : "每周限额重置";
+  if (g.type === "full") return "完全重置（每周 + 5 小时）";
+  if (/fable/i.test(g.label || "")) return "Fable 限额重置";
+  return resetTitle(g.label);
+}
+
+// cedar_ember → { available, credits: [每次重置一行] }；读不到（不支持 / 版本旧）返回 null
+function claudeResets(ce) {
+  if (!ce || typeof ce !== "object") return null;
+  const grants = Array.isArray(ce.grants) ? ce.grants : [];
+  if (!ce.eligible && !grants.length) return ce.ineligible_reason === "no_grant" ? { available: 0, credits: [], at: Date.now() } : null;
+  const credits = [];
+  for (const g of grants) {
+    if (!g || !g.id) continue;
+    const left = Math.max(0, Math.floor(Number(g.resets_left) || 0));
+    const exp = parseTime(g.ends_at);
+    if (!left || (exp && exp < Date.now())) continue;
+    const why = g.paused ? "已暂停"
+      : g.unavailable_reason === "cooldown" || (ce.cooldown_until && parseTime(ce.cooldown_until) > Date.now()) ? "冷却中"
+      : !g.usable_now && g.use_requires_limit ? "用满后可用"
+      : !g.usable_now && g.unavailable_reason ? "暂不可用" : "";
+    const title = claudeResetTitle(g);
+    for (let i = 0; i < Math.min(left, 20); i++) {
+      credits.push({ id: String(g.id), title, rawTitle: g.label || "", startsAt: parseTime(g.starts_at), expiresAt: exp, locked: why });
+    }
+  }
+  credits.sort((a, b) => (a.expiresAt || Infinity) - (b.expiresAt || Infinity));
+  return { available: credits.length, credits, at: Date.now() };
+}
+
+const claudeResetFile = (ctx) => (ctx && ctx.dataDir ? path.join(ctx.dataDir, "claude-resets.json") : "");
+
+function claudeApplyResets(st, d, ctx) {
+  const f = claudeResetFile(ctx);
+  const r = d && d.cedar_ember !== undefined ? claudeResets(d.cedar_ember) : null;
+  if (r) { writeResetFile(f, r, true); st.resets = r; return; }
+  const c = readResetFile(f); // 这次没读到：显示本机保存的（标「上次读取」）
+  if (c && c.credits.length) st.resets = c;
+}
+
+async function consumeClaudeReset(cfg, grantId) {
+  const a = claudeAuth;
+  if (!a) throw new Error("还没有读到 Claude 的登录信息，请稍等刷新一次再试");
+  let org = a.org;
+  if (!org) {
+    for (const f of [path.join(home(), ".claude.json"), ...claudeDirs().map((d) => path.join(d, ".claude.json"))]) {
+      const j = readJSON(f);
+      if (j && j.oauthAccount && j.oauthAccount.organizationUuid) { org = j.oauthAccount.organizationUuid; break; }
+    }
+  }
+  if (!org) throw new Error("没有找到 Claude 的组织信息：请在 claude.ai 设置 → 用量 里使用这次重置");
+  if (!grantId) {
+    const c = readResetFile(claudeResetFile(a.ctx));
+    const g = c && c.credits.find((x) => !x.locked);
+    if (!g) throw new Error("没有可以立即使用的重置");
+    grantId = g.id;
+  }
+  const body = JSON.stringify({ program: "cedar_ember", grant_id: grantId, request_id: require("crypto").randomUUID() });
+  let r;
+  try {
+    r = a.kind === "oauth"
+      ? await requestJSON({ url: `https://api.anthropic.com/api/organizations/${org}/reset_rate_limits`, method: "POST", headers: a.headers, body, timeout: 25000 })
+      : await requestJSON({ url: `https://claude.ai/api/organizations/${org}/reset_rate_limits`, method: "POST", body, timeout: 25000,
+        headers: webHeaders("https://claude.ai", { "anthropic-client-platform": "web_claude_ai", "Content-Type": "application/json", ...(a.cookieHeader ? { Cookie: a.cookieHeader } : {}) }),
+        session: a.ctx && a.ctx.webSession, useSessionCookies: !a.cookieHeader });
+  } catch (e) {
+    if (e.auth) throw new Error("Claude 登录已过期，请重新登录后再试");
+    if (e.status === 429) throw new Error("请求太频繁，请稍后再试");
+    throw e;
+  }
+  const code = String((r && r.result) || "");
+  const msg = {
+    reset: "重置成功，限额已恢复", already_used: "这次重置已经用过了", not_limited: "现在还没用满，这次重置已保留",
+    cooldown: "刚重置过，冷却中，请稍后再试", ineligible: "这个账号暂时不能使用重置", unavailable: "这次重置暂时不可用",
+  }[code] || "已提交重置请求";
+  return { ok: code === "reset", code, message: msg };
 }
 
 // ======================= Codex =======================
@@ -137,15 +269,15 @@ let codexApiAt = 0;
 let codexResets = null; // { available, credits: [...], at }
 // 每次重置的详情（类型、到期时间）保存到本机：连不上 ChatGPT 时也能逐条显示上次读到的
 function resetCacheFile() { return codexCtx && codexCtx.dataDir ? path.join(codexCtx.dataDir, "codex-resets.json") : ""; }
-function loadResetCache() {
-  const f = resetCacheFile();
+function loadResetCache() { return readResetFile(resetCacheFile()); }
+function readResetFile(f) {
   const j = f ? readJSON(f) : null;
   if (!j || !Array.isArray(j.credits)) return null;
   const credits = j.credits.filter((c) => !c.expiresAt || c.expiresAt > Date.now()); // 去掉已过期的
   return { available: Math.min(j.available || credits.length, credits.length), credits, at: j.at || 0, cached: true };
 }
-function saveResetCache(r, force) {
-  const f = resetCacheFile();
+function saveResetCache(r, force) { writeResetFile(resetCacheFile(), r, force); }
+function writeResetFile(f, r, force) {
   if (!f || !r || (!force && !(r.credits || []).length)) return;
   try { fs.writeFileSync(f, JSON.stringify({ available: r.available, credits: r.credits, at: r.at })); } catch { /* ignore */ }
 }
@@ -239,17 +371,41 @@ function resetTitle(t) {
   return t || "限额重置";
 }
 
+const mapCredits = (list) => (list || [])
+  .filter((c) => c && c.id && (!c.status || c.status === "available"))
+  .map((c) => ({ id: String(c.id), title: resetTitle(c.title), rawTitle: c.title || "", grantedAt: parseTime(c.granted_at), expiresAt: parseTime(c.expires_at) }))
+  .sort((a, b) => (a.expiresAt || Infinity) - (b.expiresAt || Infinity));
+
+// 本机 Codex 程序一并返回了每次重置的详情
+function codexCreditsFrom(list, available) {
+  return { available: available || 0, credits: mapCredits(list), at: Date.now() };
+}
+
 async function codexResetDetails(auth, available) {
   const out = { available: available || 0, credits: [], at: Date.now() };
   try {
     const r = await codexReq("https://chatgpt.com/backend-api/wham/rate-limit-reset-credits", auth);
     if (num(r, "available_count") != null) out.available = num(r, "available_count");
-    out.credits = (r.credits || [])
-      .filter((c) => c && c.id && (!c.status || c.status === "available"))
-      .map((c) => ({ id: String(c.id), title: resetTitle(c.title), rawTitle: c.title || "", grantedAt: parseTime(c.granted_at), expiresAt: parseTime(c.expires_at) }))
-      .sort((a, b) => (a.expiresAt || Infinity) - (b.expiresAt || Infinity));
+    out.credits = mapCredits(r.credits);
   } catch { /* 详情接口失败时仍显示次数 */ }
   return out;
+}
+
+// ---------- 本机 Codex 程序（codex app-server）----------
+let codexCliFirstUntil = 0; // 网络请求被拦后，30 分钟内优先用本机 Codex 程序
+async function codexCliEnv() {
+  const env = {};
+  if (process.env.HTTPS_PROXY || process.env.https_proxy || process.env.ALL_PROXY) return env;
+  const px = pickProxy(await resolveProxyFor("https://chatgpt.com").catch(() => "DIRECT"));
+  if (px && px.type === "http") env.HTTPS_PROXY = env.HTTP_PROXY = `http://${px.host}:${px.port}`;
+  else if (px) env.ALL_PROXY = `socks5h://${px.host}:${px.port}`;
+  return env;
+}
+async function codexViaCli() {
+  const r = await codexCli.rpc("account/rateLimits/read", undefined, { env: await codexCliEnv(), timeout: 20000 });
+  const d = codexCli.toWham(r);
+  if (!d.rate_limit.primary_window && !d.rate_limit.secondary_window) throw new Error("本机 Codex 程序没有返回额度（可能未登录 ChatGPT 账号）");
+  return d;
 }
 
 async function consumeCodexReset(cfg, creditId) {
@@ -263,7 +419,13 @@ async function consumeCodexReset(cfg, creditId) {
     r = await codexReq("https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume", auth, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   } catch (e) {
     if (e.auth) throw new Error("Codex 登录已过期或账号不支持重置：运行一次 codex 刷新登录");
-    throw e;
+    if (!(e.cfBlocked || isBlocked(e) || isNetErr(e))) throw e;
+    // 网络被拦：改用本机 Codex 程序执行重置
+    let o;
+    try {
+      o = await codexCli.rpc("account/rateLimitResetCredit/consume", { idempotencyKey: body.redeem_request_id, ...(creditId ? { creditId } : {}) }, { env: await codexCliEnv(), timeout: 25000 });
+    } catch { throw e; }
+    r = { code: { reset: "reset", nothingToReset: "nothing_to_reset", noCredit: "no_credit", alreadyRedeemed: "already_redeemed" }[o && o.outcome] || String((o && o.outcome) || "") };
   }
   codexApiAt = 0;        // 下次刷新强制走在线接口，拿到重置后的最新用量
   codexResets = null;
@@ -300,14 +462,20 @@ async function fetchCodex(cfg, ctx) {
   }
   // 用量只取线上接口（账号级数据）：两台电脑都用的话，本机会话日志只记得本机最后一次的额度，会不准。
   // 本机日志只用来画「本机」趋势图，以及触发「刚用过，马上刷新一次」。
-  if (Date.now() < codexBlockedUntil && !(await codexWebToken().catch(() => null))) {
-    const err = new Error(CF_NOTE); // 刚被 Cloudflare 拦过：15 分钟内不再撞墙（显示上次的线上数据）
-    const c = loadResetCache(); if (c && c.credits.length) err.patch = { resets: c };
-    throw err;
+  const keep = (err) => { const c = loadResetCache(); if (c && c.credits.length) err.patch = { resets: c }; return err; };
+  let d, viaCli = false;
+  // 最近被 Cloudflare 拦过：先用本机 Codex 程序读（它走 Codex 自己的网络通道，不会被拦）
+  if (Date.now() < codexBlockedUntil || Date.now() < codexCliFirstUntil) {
+    try { d = await codexViaCli(); viaCli = true; } catch (e) {
+      codexLog(`[codex] 本机 Codex 程序读取失败：${String(e.message).slice(0, 100)}`);
+      if (Date.now() < codexBlockedUntil && !(await codexWebToken().catch(() => null))) throw keep(new Error(CF_NOTE));
+    }
   }
-  if (!token) throw new NoLogin("没有检测到 Codex 登录。运行 codex 并用 ChatGPT 账号登录，或在设置 → Codex 点「登录网页版」。");
-  let d;
-  try {
+  if (!d && !token) {
+    try { d = await codexViaCli(); viaCli = true; } catch { /* 没装 Codex 程序 */ }
+    if (!d) throw new NoLogin("没有检测到 Codex 登录。运行 codex 并用 ChatGPT 账号登录，或在设置 → Codex 点「登录网页版」。");
+  }
+  if (!d) try {
     d = await codexReq("https://chatgpt.com/backend-api/wham/usage", cauth);
   } catch (e) {
     // 这台电脑上 Codex 的登录过期了（很久没在这台电脑上用 Codex）：改用网页登录再试一次
@@ -316,24 +484,29 @@ async function fetchCodex(cfg, ctx) {
       Object.assign(cauth, { token: w.token, accountId: w.accountId });
       try { d = await codexReq("https://chatgpt.com/backend-api/wham/usage", cauth); st.account = w.email || st.account; } catch (e2) { e = e2; }
     }
+    // 被 Cloudflare 拦了 / 连不上：改用本机 Codex 程序读同一份线上数据
+    if (!d && !e.auth && (e.cfBlocked || isBlocked(e) || isNetErr(e))) {
+      try { d = await codexViaCli(); viaCli = true; codexCliFirstUntil = Date.now() + 30 * 60000; codexLog("[codex] 网络请求失败，改用本机 Codex 程序读取成功"); } catch (e3) {
+        codexLog(`[codex] 本机 Codex 程序读取失败：${String(e3.message).slice(0, 100)}`);
+      }
+    }
     if (!d) {
-      const keep = (err) => { const c = loadResetCache(); if (c && c.credits.length) err.patch = { resets: c }; return err; };
       if (e.cfBlocked) { codexBlockedUntil = Date.now() + 15 * 60000; codexLog("[codex] 在线接口被 Cloudflare 拦截，15 分钟后再试"); throw keep(new Error(CF_NOTE)); }
       if (e.auth) throw new NoLogin("这台电脑上的 Codex 登录已过期：运行一次 codex 即可刷新，或在设置 → Codex 点「登录网页版」");
       throw keep(e);
     }
   }
   codexApiAt = Date.now();
-  codexBlockedUntil = 0;
-  st.source = cauth.token === token ? "ChatGPT 在线接口" : "ChatGPT 在线接口（网页登录）";
+  if (!viaCli) { codexBlockedUntil = 0; codexCliFirstUntil = 0; }
+  st.source = viaCli ? "ChatGPT 在线数据（经本机 Codex 程序）" : cauth.token === token ? "ChatGPT 在线接口" : "ChatGPT 在线接口（网页登录）";
   const rc = d.rate_limit_reset_credits;
   if (rc && num(rc, "available_count") != null) {
     const n = num(rc, "available_count");
     // 次数变化或缓存超过 10 分钟才重新拉详情
     // 次数变了、超过 10 分钟、或上次没拿到详情：重新读详情；读到就存到本机，读不到用本机保存的
     const stale = !codexResets || codexResets.available !== n || Date.now() - codexResets.at > 10 * 60000 || (n > 0 && !(codexResets.credits || []).length) || codexResets.cached;
-    if (stale) {
-      codexResets = n > 0 ? await codexResetDetails(cauth, n) : { available: 0, credits: [], at: Date.now() };
+    if (stale || d.reset_credit_details) {
+      codexResets = n > 0 ? (d.reset_credit_details ? codexCreditsFrom(d.reset_credit_details, n) : await codexResetDetails(cauth, n)) : { available: 0, credits: [], at: Date.now() };
       if ((codexResets.credits || []).length) saveResetCache(codexResets);
       else if (n === 0) saveResetCache({ available: 0, credits: [], at: Date.now() }, true); // 用完了：清空本机保存的
       codexResets = withCachedCredits(codexResets);
@@ -729,7 +902,7 @@ async function fetchHunyuan(cfg) {
 
 const FETCHERS = { claude: fetchClaude, codex: fetchCodex, cursor: fetchCursor, gemini: fetchGemini, copilot: fetchCopilot, kimi: fetchKimi, glm: fetchGLM, deepseek: fetchDeepSeek, hunyuan: fetchHunyuan };
 
-const RESETTERS = { codex: consumeCodexReset };
+const RESETTERS = { codex: consumeCodexReset, claude: consumeClaudeReset };
 
 // 给「对话完成提醒」用：拿 ChatGPT 访问令牌（优先网页登录，其次 Codex 登录），并用同样的防拦截方式请求
 async function chatgptAuth(ctx) {
