@@ -22,6 +22,13 @@ const ember = { eligible: true, at_limit: false, grants: [
   { id: "wk", label: "Weekly limit reset", type: "weekly", resets_total: 1, resets_left: 1, ends_at: new Date(now + 20 * day).toISOString(), usable_now: false, use_requires_limit: true, clears: [], blocking: [] },
   { id: "s5", label: "5-hour limit reset", type: "session", resets_total: 2, resets_left: 2, ends_at: new Date(now + 5 * day).toISOString(), usable_now: true, use_requires_limit: false, clears: [], blocking: [] },
   { id: "old", label: "x", type: "full", resets_total: 1, resets_left: 1, ends_at: new Date(now - day).toISOString(), usable_now: true } ] };
+// 用户截图里的真实情况：一个完全重置 + 一个 Fable 重置（Fable 的 type 也是 full）
+const ember2 = { eligible: true, grants: [
+  { id: "full1", label: "Full reset", type: "full", resets_left: 1, ends_at: new Date(now + 30 * day).toISOString(), usable_now: true, clears: ["five_hour", "seven_day"] },
+  { id: "fab1", label: "Fable reset", type: "full", resets_left: 1, ends_at: new Date(now + 6 * day).toISOString(), usable_now: true, gives_back_weekly: true } ] };
+const ember3 = { eligible: true, grants: [ // 名字里没写 Fable，只靠字段判断
+  { id: "f2", label: "Limit reset", type: "full", resets_left: 1, usable_now: true, clears: ["five_hour", "seven_day_omelette"] },
+  { id: "f3", label: "Limit reset", type: "full", resets_left: 1, usable_now: true, gives_back_weekly: true } ] };
 
 (async () => {
   // 1) Claude：带 cedar_ember=1 读到每一次重置
@@ -70,6 +77,19 @@ const ember = { eligible: true, at_limit: false, grants: [
   st = await prov.FETCHERS.claude({}, { dataDir });
   assert.strictEqual(st.resets.available, 0);
   ok("没有重置时显示 0 次");
+
+  // 5b) Fable 重置不能算成完全重置
+  ({ http, prov } = load());
+  http.setTransport(async () => J({ ...usage, cedar_ember: ember2 }));
+  st = await prov.FETCHERS.claude({}, { dataDir: fs.mkdtempSync(path.join(os.tmpdir(), "ccxf-")) });
+  assert.deepStrictEqual(st.resets.credits.map((c) => c.kind), ["fable", "full"]);
+  assert.strictEqual(st.resets.credits[0].title, "Fable 重置");
+  assert.strictEqual(st.resets.credits[1].title, "完全重置（每周 + 5 小时）");
+  assert.ok(/不会重置每周总限额/.test(st.resets.credits[0].desc));
+  http.setTransport(async () => J({ ...usage, cedar_ember: ember3 }));
+  st = await prov.FETCHERS.claude({}, { dataDir: fs.mkdtempSync(path.join(os.tmpdir(), "ccxf-")) });
+  assert.deepStrictEqual(st.resets.credits.map((c) => c.kind), ["fable", "fable"]);
+  ok("Fable 重置单独显示（即使接口把类型标成 full），不算进完全重置");
 
   // 6) Codex：chatgpt.com 被 Cloudflare 拦 → 改用本机 Codex 程序（app-server）
   const fake = path.join(H, "fake-codex.js");

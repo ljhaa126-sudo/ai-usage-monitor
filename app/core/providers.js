@@ -162,12 +162,29 @@ async function claudeUsage(kind, get) {
   }
 }
 
+// 判断重置的种类。Fable 重置在接口里的 type 也可能是 full，所以先认 Fable：
+// 名字里带 Fable、标了 gives_back_weekly（返还 Fable 在每周限额里的用量），或者清的只是某个模型的每周额度而不是总的 seven_day
+function claudeResetKind(g) {
+  const lab = String(g.label || "");
+  const clears = Array.isArray(g.clears) ? g.clears : [];
+  if (/fable/i.test(lab) || g.gives_back_weekly || (clears.length && !clears.includes("seven_day") && clears.some((c) => /^seven_day_/.test(c)))) return "fable";
+  if (g.type === "session") return "session";
+  if (g.type === "weekly") return "weekly";
+  if (g.type === "full") return "full";
+  if (/full|complete/i.test(lab)) return "full";
+  if (/week/i.test(lab)) return "weekly";
+  if (/5\s*-?\s*h(ou)?r|session/i.test(lab)) return "session";
+  return "";
+}
+const CLAUDE_RESET_TEXT = {
+  full: ["完全重置（每周 + 5 小时）", "同时恢复 5 小时限额和每周限额"],
+  fable: ["Fable 重置", "补满 5 小时限额和 Fable 额度，并返还 Fable 在每周限额里用掉的部分；不会重置每周总限额"],
+  session: ["5 小时限额重置", "恢复 5 小时限额，不影响每周限额"],
+  weekly: ["每周限额重置", "恢复每周限额"],
+};
 function claudeResetTitle(g) {
-  if (g.type === "session") return "5 小时限额重置";
-  if (g.type === "weekly") return /fable/i.test(g.label || "") ? "Fable 每周限额重置" : "每周限额重置";
-  if (g.type === "full") return "完全重置（每周 + 5 小时）";
-  if (/fable/i.test(g.label || "")) return "Fable 限额重置";
-  return resetTitle(g.label);
+  const t = CLAUDE_RESET_TEXT[claudeResetKind(g)];
+  return t ? t[0] : resetTitle(g.label);
 }
 
 // cedar_ember → { available, credits: [每次重置一行] }；读不到（不支持 / 版本旧）返回 null
@@ -185,9 +202,11 @@ function claudeResets(ce) {
       : g.unavailable_reason === "cooldown" || (ce.cooldown_until && parseTime(ce.cooldown_until) > Date.now()) ? "冷却中"
       : !g.usable_now && g.use_requires_limit ? "用满后可用"
       : !g.usable_now && g.unavailable_reason ? "暂不可用" : "";
+    const kind = claudeResetKind(g);
     const title = claudeResetTitle(g);
+    const desc = (CLAUDE_RESET_TEXT[kind] || [])[1] || "";
     for (let i = 0; i < Math.min(left, 20); i++) {
-      credits.push({ id: String(g.id), title, rawTitle: g.label || "", startsAt: parseTime(g.starts_at), expiresAt: exp, locked: why });
+      credits.push({ id: String(g.id), kind, title, desc, rawTitle: g.label || "", startsAt: parseTime(g.starts_at), expiresAt: exp, locked: why });
     }
   }
   credits.sort((a, b) => (a.expiresAt || Infinity) - (b.expiresAt || Infinity));
@@ -196,8 +215,13 @@ function claudeResets(ce) {
 
 const claudeResetFile = (ctx) => (ctx && ctx.dataDir ? path.join(ctx.dataDir, "claude-resets.json") : "");
 
+let claudeGrantSig = "";
 function claudeApplyResets(st, d, ctx) {
   const f = claudeResetFile(ctx);
+  const gs = d && d.cedar_ember && Array.isArray(d.cedar_ember.grants) ? d.cedar_ember.grants : [];
+  const sig = gs.map((g) => [g.label, g.type, (g.clears || []).join("+"), g.gives_back_weekly ? "gbw" : "", g.resets_left, g.usable_now ? "now" : ""].join("|")).join("; ");
+  if (sig && sig !== claudeGrantSig && ctx && ctx.log) ctx.log(`[claude] 限额重置：${sig}`); // 记一次原始字段，方便核对分类
+  claudeGrantSig = sig;
   const r = d && d.cedar_ember !== undefined ? claudeResets(d.cedar_ember) : null;
   if (r) { writeResetFile(f, r, true); st.resets = r; return; }
   const c = readResetFile(f); // 这次没读到：显示本机保存的（标「上次读取」）

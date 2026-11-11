@@ -450,13 +450,13 @@
     if (n > 0) {
       const cs = (r.credits || []).slice(0, Math.max(n, 1));
       items = cs.length
-        ? cs.map((c) => `<div class="row rs-item"><div class="rs-t"><div class="n">${esc(c.title || "限额重置")}</div><div class="sub">${esc(expText(c.expiresAt) || "没有到期时间")}</div></div>${c.locked ? lockBtn(c) : rsBtn(s, c.id)}</div>`).join("")
+        ? cs.map((c) => `<div class="row rs-item"><div class="rs-t"><div class="n">${esc(c.title || "限额重置")}</div><div class="sub">${esc(expText(c.expiresAt) || "没有到期时间")}</div>${c.desc ? `<div class="sub" style="margin-top:2px">${esc(c.desc)}</div>` : ""}</div>${c.locked ? lockBtn(c) : rsBtn(s, c.id)}</div>`).join("")
         : `<div class="row rs-item"><div class="rs-t"><div class="n">限额重置 × ${n}</div><div class="sub">由服务端自动选择最早到期的一次</div></div>${rsBtn(s, "")}</div>`;
     } else {
       items = `<div class="row rs-item"><div class="rs-t"><div class="sub">暂无可用的重置次数</div></div></div>`;
     }
     return `<div><div class="hdr"><span>使用限额重置</span><span>可用 <b class="rs-n ${n ? "on" : ""}">${n}</b> 次</span></div>
-      <div class="grp"><div class="row rs-intro">${s.id === "claude" ? "Claude 不定期赠送的免费重置：按类型恢复 5 小时限额或每周限额，过期作废" : "使用一次重置，即可恢复 5 小时限额、每周限额，或同时恢复两者"}${r.cached ? "（上次读取）" : ""}</div>${items}</div>${msg}</div>`;
+      <div class="grp"><div class="row rs-intro">${s.id === "claude" ? "Claude 不定期赠送的免费重置，各自恢复的范围不同（见每条说明），过期作废" : "使用一次重置，即可恢复 5 小时限额、每周限额，或同时恢复两者"}${r.cached ? "（上次读取）" : ""}</div>${items}</div>${msg}</div>`;
   }
 
   function rerender() {
